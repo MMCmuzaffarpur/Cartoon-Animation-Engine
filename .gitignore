@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.env
+.local-data/
+cache/
+renders/
+tmp/
+*.sqlite
+*.sqlite-journal
+*.log
+assets/sha256/

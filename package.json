@@ -1,0 +1,30 @@
+{
+  "name": "cartoon-animation-engine",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Local-first, deterministic, open-source 2D/3D/hybrid cartoon animation engine.",
+  "license": "MIT",
+  "engines": { "node": ">=20" },
+  "workspaces": ["packages/*", "apps/*"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "dev": "tsx apps/local-server/src/index.ts",
+    "start": "node dist/apps/local-server/src/index.js",
+    "cli": "tsx apps/cli/src/index.ts",
+    "schema:validate": "tsx tools/validate-schemas.ts"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.0.0",
+    "fastify": "^5.0.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/node": "^24.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.8.0",
+    "vitest": "^3.0.0"
+  }
+}
