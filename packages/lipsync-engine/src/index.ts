@@ -6,8 +6,13 @@ import {
 } from "../../contracts/src/index.js";
 
 /* -------------------------------------------------------------------------- */
-/* Types                                                                      */
+/* Public Types                                                               */
 /* -------------------------------------------------------------------------- */
+
+export type Interpolation =
+  | "step"
+  | "linear"
+  | "smooth";
 
 export interface PhonemeEvent {
   startTick: number;
@@ -37,12 +42,11 @@ export interface LipSyncCurve {
   targetPath: string;
   startValue: number;
   endValue: number;
-  interpolation: "linear" | "smooth" | "step";
+  interpolation: Interpolation;
 }
 
-export type LipSyncTrack = z.infer<
-  typeof LipSyncTrackSchema
->;
+export type LipSyncTrack =
+  z.infer<typeof LipSyncTrackSchema>;
 
 export interface LipSyncValidationResult {
   valid: boolean;
@@ -58,6 +62,27 @@ export interface LipSyncControls {
   controls: Record<string, number>;
 }
 
+export interface VisemeDefinition {
+  id: string;
+  controls: Record<string, number>;
+}
+
+/**
+ * Adapter contract for future local speech analyzers.
+ *
+ * The core engine does not require an AI model, internet,
+ * cloud API, or proprietary service.
+ */
+export interface LipSyncAnalyzer {
+  readonly id: string;
+  readonly version: string;
+
+  analyze(input: {
+    audioAssetId?: string | null;
+    language: string;
+  }): Promise<PhonemeEvent[]>;
+}
+
 /* -------------------------------------------------------------------------- */
 /* Constants                                                                  */
 /* -------------------------------------------------------------------------- */
@@ -65,11 +90,22 @@ export interface LipSyncControls {
 export const LIP_SYNC_VERSION = "1.0.0";
 export const ALIGNMENT_VERSION = "1.0.0";
 
+export const DEFAULT_COARTICULATION_TICKS =
+  1_000;
+
+export const DEFAULT_COARTICULATION_STRENGTH =
+  0.65;
+
+/* -------------------------------------------------------------------------- */
+/* Phoneme → Viseme Mapping                                                   */
+/* -------------------------------------------------------------------------- */
+
 export const PHONEME_TO_VISEME: Record<
   string,
   string
 > = {
   /* Vowels */
+
   A: "AI",
   AA: "AI",
   AE: "AI",
@@ -77,15 +113,16 @@ export const PHONEME_TO_VISEME: Record<
   AY: "AI",
 
   E: "E",
+  EE: "E",
   EH: "E",
   EY: "E",
   I: "E",
   IH: "E",
-  EE: "E",
 
   O: "O",
   AO: "O",
   OW: "O",
+  OY: "O",
 
   U: "U",
   UH: "U",
@@ -93,52 +130,69 @@ export const PHONEME_TO_VISEME: Record<
   OO: "U",
 
   /* Bilabial */
+
   B: "MBP",
-  P: "MBP",
   M: "MBP",
+  P: "MBP",
 
   /* Labiodental */
+
   F: "FV",
   V: "FV",
 
-  /* Alveolar */
+  /* Dental / alveolar */
+
   D: "DNTL",
   T: "DNTL",
   N: "DNTL",
   L: "DNTL",
 
+  TH: "TH",
+  DH: "TH",
+
   /* Sibilants */
+
   S: "SZ",
   Z: "SZ",
 
   /* Postalveolar */
+
   SH: "SH",
   ZH: "SH",
   CH: "SH",
   JH: "SH",
+  J: "SH",
 
   /* Velar */
+
   K: "KG",
   G: "KG",
   NG: "KG",
+  Q: "KG",
+  X: "KG",
 
   /* Approximants */
+
   R: "R",
   W: "U",
   Y: "E",
 
-  /* Glottal / dental */
+  /* Glottal */
+
   HH: "REST",
-  TH: "TH",
-  DH: "TH",
 
   /* Silence */
+
   SIL: "REST",
   SP: "REST",
   SILENCE: "REST",
   PAUSE: "REST",
   REST: "REST",
 };
+
+/* -------------------------------------------------------------------------- */
+/* Viseme → Facial Controls                                                   */
+/* -------------------------------------------------------------------------- */
 
 export const VISEME_TO_CONTROLS: Record<
   string,
@@ -147,6 +201,9 @@ export const VISEME_TO_CONTROLS: Record<
   REST: {
     mouthOpen: 0,
     jawOpen: 0,
+    mouthWide: 0,
+    mouthNarrow: 0,
+    lipPucker: 0,
   },
 
   AI: {
@@ -154,6 +211,7 @@ export const VISEME_TO_CONTROLS: Record<
     jawOpen: 0.35,
     mouthWide: 0.65,
     mouthNarrow: 0,
+    lipPucker: 0,
   },
 
   E: {
@@ -161,6 +219,7 @@ export const VISEME_TO_CONTROLS: Record<
     jawOpen: 0.2,
     mouthWide: 0.75,
     mouthNarrow: 0,
+    lipPucker: 0,
   },
 
   O: {
@@ -191,6 +250,8 @@ export const VISEME_TO_CONTROLS: Record<
     mouthOpen: 0.15,
     jawOpen: 0.05,
     mouthWide: 0.25,
+    mouthNarrow: 0,
+    lipPucker: 0,
     lowerLipDepress: 0.45,
   },
 
@@ -198,17 +259,22 @@ export const VISEME_TO_CONTROLS: Record<
     mouthOpen: 0.2,
     jawOpen: 0.08,
     mouthWide: 0.2,
+    mouthNarrow: 0,
+    lipPucker: 0,
   },
 
   SZ: {
     mouthOpen: 0.12,
     jawOpen: 0.05,
     mouthWide: 0.3,
+    mouthNarrow: 0,
+    lipPucker: 0,
   },
 
   SH: {
     mouthOpen: 0.18,
     jawOpen: 0.08,
+    mouthWide: 0,
     mouthNarrow: 0.35,
     lipPucker: 0.25,
   },
@@ -216,20 +282,39 @@ export const VISEME_TO_CONTROLS: Record<
   KG: {
     mouthOpen: 0.25,
     jawOpen: 0.15,
+    mouthWide: 0,
+    mouthNarrow: 0,
+    lipPucker: 0,
   },
 
   R: {
     mouthOpen: 0.18,
     jawOpen: 0.08,
+    mouthWide: 0,
     mouthNarrow: 0.25,
+    lipPucker: 0.05,
   },
 
   TH: {
     mouthOpen: 0.18,
     jawOpen: 0.08,
     mouthWide: 0.15,
+    mouthNarrow: 0,
+    lipPucker: 0,
   },
 };
+
+export const VISEME_DEFINITIONS: VisemeDefinition[] =
+  Object.entries(
+    VISEME_TO_CONTROLS,
+  ).map(
+    ([id, controls]) => ({
+      id,
+      controls: structuredClone(
+        controls,
+      ),
+    }),
+  );
 
 /* -------------------------------------------------------------------------- */
 /* Utility                                                                    */
@@ -242,7 +327,10 @@ function clamp(
 ): number {
   return Math.min(
     max,
-    Math.max(min, value),
+    Math.max(
+      min,
+      value,
+    ),
   );
 }
 
@@ -251,13 +339,22 @@ function lerp(
   b: number,
   t: number,
 ): number {
-  return a + (b - a) * t;
+  return (
+    a +
+    (b - a) *
+      clamp(t, 0, 1)
+  );
 }
 
 function smoothstep(
   t: number,
 ): number {
-  const x = clamp(t, 0, 1);
+  const x =
+    clamp(
+      t,
+      0,
+      1,
+    );
 
   return (
     x *
@@ -273,23 +370,34 @@ function canonicalize(
     value === null ||
     typeof value !== "object"
   ) {
-    return JSON.stringify(value);
+    return JSON.stringify(
+      value,
+    );
   }
 
-  if (Array.isArray(value)) {
+  if (
+    Array.isArray(value)
+  ) {
     return `[${value
       .map(canonicalize)
       .join(",")}]`;
   }
 
   const object =
-    value as Record<string, unknown>;
+    value as Record<
+      string,
+      unknown
+    >;
 
-  return `{${Object.keys(object)
+  return `{${Object.keys(
+    object,
+  )
     .sort()
     .map(
       (key) =>
-        `${JSON.stringify(key)}:${canonicalize(
+        `${JSON.stringify(
+          key,
+        )}:${canonicalize(
           object[key],
         )}`,
     )
@@ -299,28 +407,54 @@ function canonicalize(
 function deterministicUuid(
   input: string,
 ): string {
-  const digest = createHash("sha256")
-    .update(input)
-    .digest("hex");
+  const digest =
+    createHash("sha256")
+      .update(input)
+      .digest("hex");
 
-  const bytes = digest.slice(0, 32);
+  const bytes =
+    digest.slice(
+      0,
+      32,
+    );
 
   return (
-    `${bytes.slice(0, 8)}-` +
-    `${bytes.slice(8, 12)}-` +
-    `5${bytes.slice(13, 16)}-` +
+    `${bytes.slice(
+      0,
+      8,
+    )}-` +
+    `${bytes.slice(
+      8,
+      12,
+    )}-` +
+    `5${bytes.slice(
+      13,
+      16,
+    )}-` +
     `${(
       (parseInt(
-        bytes.slice(16, 18),
+        bytes.slice(
+          16,
+          18,
+        ),
         16,
       ) &
         0x3f) |
       0x80
     )
       .toString(16)
-      .padStart(2, "0")}` +
-    `${bytes.slice(18, 20)}-` +
-    `${bytes.slice(20, 32)}`
+      .padStart(
+        2,
+        "0",
+      )}` +
+    `${bytes.slice(
+      18,
+      20,
+    )}-` +
+    `${bytes.slice(
+      20,
+      32,
+    )}`
   );
 }
 
@@ -328,7 +462,9 @@ function normalizeLanguage(
   language: string,
 ): string {
   const value =
-    language.trim().toLowerCase();
+    language
+      .trim()
+      .toLowerCase();
 
   if (!value) {
     return "en-IN";
@@ -336,20 +472,24 @@ function normalizeLanguage(
 
   if (
     value === "hi" ||
-    value === "hin"
+    value === "hin" ||
+    value === "hindi"
   ) {
     return "hi-IN";
   }
 
   if (
     value === "en" ||
-    value === "eng"
+    value === "eng" ||
+    value === "english"
   ) {
     return "en-IN";
   }
 
   if (
-    value === "hinglish"
+    value === "hinglish" ||
+    value === "hi-en" ||
+    value === "hi_en"
   ) {
     return "hi-en";
   }
@@ -368,7 +508,10 @@ export function normalizePhoneme(
     phoneme
       .trim()
       .toUpperCase()
-      .replace(/[0-9]+$/g, "");
+      .replace(
+        /[0-9]+$/g,
+        "",
+      );
 
   if (!normalized) {
     return "SIL";
@@ -376,21 +519,10 @@ export function normalizePhoneme(
 
   if (
     normalized ===
-    "SILENCE"
-  ) {
-    return "SIL";
-  }
-
-  if (
+      "SILENCE" ||
     normalized ===
-    "PAUSE"
-  ) {
-    return "SIL";
-  }
-
-  if (
-    normalized ===
-    "SP"
+      "PAUSE" ||
+    normalized === "SP"
   ) {
     return "SIL";
   }
@@ -399,14 +531,15 @@ export function normalizePhoneme(
 }
 
 /* -------------------------------------------------------------------------- */
-/* Phoneme Validation                                                         */
+/* Event Validation                                                           */
 /* -------------------------------------------------------------------------- */
 
 function validatePhonemeEvent(
   event: PhonemeEvent,
   index: number,
 ): string[] {
-  const errors: string[] = [];
+  const errors: string[] =
+    [];
 
   if (
     !Number.isInteger(
@@ -465,6 +598,8 @@ function validatePhonemeEvent(
   }
 
   if (
+    typeof event.phoneme !==
+      "string" ||
     event.phoneme.trim()
       .length === 0
   ) {
@@ -476,11 +611,146 @@ function validatePhonemeEvent(
   return errors;
 }
 
+function validateVisemeEvent(
+  event: VisemeEvent,
+  index: number,
+): string[] {
+  const errors: string[] =
+    [];
+
+  if (
+    !Number.isInteger(
+      event.startTick,
+    ) ||
+    event.startTick < 0
+  ) {
+    errors.push(
+      `visemes[${index}].startTick is invalid.`,
+    );
+  }
+
+  if (
+    !Number.isInteger(
+      event.endTick,
+    ) ||
+    event.endTick <=
+      event.startTick
+  ) {
+    errors.push(
+      `visemes[${index}].endTick is invalid.`,
+    );
+  }
+
+  if (
+    !Number.isFinite(
+      event.weight,
+    ) ||
+    event.weight < 0 ||
+    event.weight > 1
+  ) {
+    errors.push(
+      `visemes[${index}].weight is invalid.`,
+    );
+  }
+
+  if (
+    typeof event.viseme !==
+      "string" ||
+    event.viseme.trim()
+      .length === 0
+  ) {
+    errors.push(
+      `visemes[${index}].viseme must not be empty.`,
+    );
+  }
+
+  return errors;
+}
+
 /* -------------------------------------------------------------------------- */
-/* Lip Sync Engine                                                            */
+/* LipSync Engine                                                             */
 /* -------------------------------------------------------------------------- */
 
 export class LipSyncEngine {
+  readonly version =
+    LIP_SYNC_VERSION;
+
+  /* ------------------------------------------------------------------------ */
+  /* Analyzer Adapter                                                         */
+  /* ------------------------------------------------------------------------ */
+
+  async analyze(
+    analyzer: LipSyncAnalyzer,
+    input: {
+      audioAssetId?: string | null;
+      language?: string;
+    },
+    options: {
+      deterministicKey?: string;
+      manualOverrides?: ManualOverride[];
+      provenance?: Record<
+        string,
+        unknown
+      >;
+      coarticulationTicks?: number;
+      coarticulationStrength?: number;
+    } = {},
+  ): Promise<LipSyncTrack> {
+    if (
+      !analyzer ||
+      typeof analyzer.analyze !==
+        "function"
+    ) {
+      throw new Error(
+        "A valid lip-sync analyzer is required.",
+      );
+    }
+
+    const language =
+      normalizeLanguage(
+        input.language ??
+          "en-IN",
+      );
+
+    const phonemes =
+      await analyzer.analyze({
+        audioAssetId:
+          input.audioAssetId ??
+          null,
+        language,
+      });
+
+    return this.createTrack(
+      phonemes,
+      {
+        language,
+        audioAssetId:
+          input.audioAssetId ??
+          null,
+        analyzer:
+          analyzer.id,
+        version:
+          analyzer.version,
+        deterministicKey:
+          options.deterministicKey,
+        manualOverrides:
+          options.manualOverrides,
+        coarticulationTicks:
+          options.coarticulationTicks,
+        coarticulationStrength:
+          options.coarticulationStrength,
+        provenance: {
+          ...(options.provenance ??
+            {}),
+          analyzerId:
+            analyzer.id,
+          analyzerVersion:
+            analyzer.version,
+        },
+      },
+    );
+  }
+
   /* ------------------------------------------------------------------------ */
   /* Normalize Phonemes                                                       */
   /* ------------------------------------------------------------------------ */
@@ -504,7 +774,11 @@ export class LipSyncEngine {
 
           confidence:
             clamp(
-              phoneme.confidence,
+              Number.isFinite(
+                phoneme.confidence,
+              )
+                ? phoneme.confidence
+                : 1,
               0,
               1,
             ),
@@ -514,7 +788,12 @@ export class LipSyncEngine {
     normalized.sort(
       (a, b) =>
         a.startTick -
-        b.startTick,
+          b.startTick ||
+        a.endTick -
+          b.endTick ||
+        a.phoneme.localeCompare(
+          b.phoneme,
+        ),
     );
 
     return structuredClone(
@@ -542,7 +821,7 @@ export class LipSyncEngine {
   }
 
   /* ------------------------------------------------------------------------ */
-  /* Generate Visemes                                                         */
+  /* Phonemes → Visemes                                                       */
   /* ------------------------------------------------------------------------ */
 
   phonemesToVisemes(
@@ -582,7 +861,10 @@ export class LipSyncEngine {
 
   applyCoarticulation(
     visemes: VisemeEvent[],
-    blendTicks = 1_000,
+    blendTicks =
+      DEFAULT_COARTICULATION_TICKS,
+    strength =
+      DEFAULT_COARTICULATION_STRENGTH,
   ): VisemeEvent[] {
     if (
       !Number.isInteger(
@@ -596,8 +878,21 @@ export class LipSyncEngine {
     }
 
     if (
+      !Number.isFinite(
+        strength,
+      ) ||
+      strength < 0 ||
+      strength > 1
+    ) {
+      throw new Error(
+        "coarticulation strength must be between 0 and 1.",
+      );
+    }
+
+    if (
+      visemes.length < 2 ||
       blendTicks === 0 ||
-      visemes.length < 2
+      strength === 0
     ) {
       return structuredClone(
         visemes,
@@ -608,7 +903,12 @@ export class LipSyncEngine {
       [...visemes].sort(
         (a, b) =>
           a.startTick -
-          b.startTick,
+            b.startTick ||
+          a.endTick -
+            b.endTick ||
+          a.viseme.localeCompare(
+            b.viseme,
+          ),
       );
 
     const result =
@@ -617,6 +917,14 @@ export class LipSyncEngine {
           ...viseme,
         }),
       );
+
+    /*
+     * Coarticulation here preserves the canonical event timing.
+     * It adjusts confidence/weight around neighboring phonemes.
+     *
+     * Actual facial interpolation is performed by generateCurves()
+     * and sampleCurve(), keeping the phoneme timeline unchanged.
+     */
 
     for (
       let i = 0;
@@ -630,13 +938,12 @@ export class LipSyncEngine {
       const next =
         result[i + 1];
 
-      const gap =
-        next.startTick -
-        current.endTick;
-
-      if (gap > blendTicks) {
-        continue;
-      }
+      const distance =
+        Math.max(
+          0,
+          next.startTick -
+            current.endTick,
+        );
 
       const overlap =
         Math.max(
@@ -645,12 +952,16 @@ export class LipSyncEngine {
             next.startTick,
         );
 
-      if (overlap > 0) {
+      if (
+        overlap > 0
+      ) {
         const total =
           current.weight +
           next.weight;
 
-        if (total > 0) {
+        if (
+          total > 0
+        ) {
           current.weight =
             current.weight /
             total;
@@ -659,57 +970,237 @@ export class LipSyncEngine {
             next.weight /
             total;
         }
+
+        continue;
       }
+
+      if (
+        distance >
+        blendTicks
+      ) {
+        continue;
+      }
+
+      const proximity =
+        clamp(
+          1 -
+            distance /
+              blendTicks,
+          0,
+          1,
+        );
+
+      const influence =
+        proximity *
+        strength;
+
+      current.weight =
+        clamp(
+          current.weight *
+            (
+              1 -
+              influence *
+                0.25
+            ),
+          0,
+          1,
+        );
+
+      next.weight =
+        clamp(
+          next.weight *
+            (
+              1 -
+              influence *
+                0.25
+            ),
+          0,
+          1,
+        );
     }
 
-    return result;
+    return structuredClone(
+      result,
+    );
   }
 
   /* ------------------------------------------------------------------------ */
-  /* Curves                                                                    */
+  /* Controls                                                                  */
+  /* ------------------------------------------------------------------------ */
+
+  getControlMapping(
+    viseme: string,
+  ): Record<string, number> {
+    return structuredClone(
+      VISEME_TO_CONTROLS[
+        viseme
+      ] ??
+        VISEME_TO_CONTROLS
+          .REST,
+    );
+  }
+
+  /* ------------------------------------------------------------------------ */
+  /* Curve Generation                                                         */
   /* ------------------------------------------------------------------------ */
 
   generateCurves(
     visemes: VisemeEvent[],
+    options: {
+      interpolation?: Interpolation;
+      targetPrefix?: string;
+    } = {},
   ): LipSyncCurve[] {
-    const curves: LipSyncCurve[] = [];
+    const interpolation =
+      options.interpolation ??
+      "smooth";
 
-    for (const viseme of visemes) {
+    const targetPrefix =
+      options.targetPrefix ??
+      "facial";
+
+    const sorted =
+      [...visemes].sort(
+        (a, b) =>
+          a.startTick -
+            b.startTick ||
+          a.endTick -
+            b.endTick,
+      );
+
+    const curves: LipSyncCurve[] =
+      [];
+
+    for (
+      let index = 0;
+      index <
+      sorted.length;
+      index += 1
+    ) {
+      const current =
+        sorted[index];
+
+      const previous =
+        index > 0
+          ? sorted[index - 1]
+          : undefined;
+
+      const next =
+        index <
+        sorted.length - 1
+          ? sorted[index + 1]
+          : undefined;
+
+      const currentControls =
+        this.getControlMapping(
+          current.viseme,
+        );
+
+      const previousControls =
+        previous
+          ? this.getControlMapping(
+              previous.viseme,
+            )
+          : this.getControlMapping(
+              "REST",
+            );
+
+      const nextControls =
+        next
+          ? this.getControlMapping(
+              next.viseme,
+            )
+          : this.getControlMapping(
+              "REST",
+            );
+
       const controls =
-        VISEME_TO_CONTROLS[
-          viseme.viseme
-        ] ??
-        VISEME_TO_CONTROLS.REST;
+        new Set<string>([
+          ...Object.keys(
+            previousControls,
+          ),
+          ...Object.keys(
+            currentControls,
+          ),
+          ...Object.keys(
+            nextControls,
+          ),
+        ]);
 
-      for (const [
-        targetPath,
-        value,
-      ] of Object.entries(
-        controls,
-      )) {
+      for (
+        const control of controls
+      ) {
+        const previousValue =
+          (
+            previousControls[
+              control
+            ] ?? 0
+          ) *
+          (
+            previous
+              ?.weight ?? 0
+          );
+
+        const currentValue =
+          (
+            currentControls[
+              control
+            ] ?? 0
+          ) *
+          current.weight;
+
+        const nextValue =
+          (
+            nextControls[
+              control
+            ] ?? 0
+          ) *
+          (
+            next?.weight ?? 0
+          );
+
+        /*
+         * Blend neighboring states instead of forcing every
+         * viseme curve to start from zero.
+         */
+
+        const startValue =
+          clamp(
+            lerp(
+              previousValue,
+              currentValue,
+              0.35,
+            ),
+            -1,
+            1,
+          );
+
+        const endValue =
+          clamp(
+            lerp(
+              currentValue,
+              nextValue,
+              0.35,
+            ),
+            -1,
+            1,
+          );
+
         curves.push({
           startTick:
-            viseme.startTick,
+            current.startTick,
 
           endTick:
-            viseme.endTick,
+            current.endTick,
 
           targetPath:
+            `${targetPrefix}.${control}`,
 
-            `facial.${targetPath}`,
+          startValue,
 
-          startValue: 0,
+          endValue,
 
-          endValue:
-            clamp(
-              value *
-                viseme.weight,
-              -1,
-              1,
-            ),
-
-          interpolation:
-            "smooth",
+          interpolation,
         });
       }
     }
@@ -718,7 +1209,64 @@ export class LipSyncEngine {
   }
 
   /* ------------------------------------------------------------------------ */
-  /* Create Track                                                              */
+  /* Alignment                                                                */
+  /* ------------------------------------------------------------------------ */
+
+  align(
+    phonemes: PhonemeEvent[],
+    language = "en-IN",
+    options: {
+      coarticulationTicks?: number;
+      coarticulationStrength?: number;
+    } = {},
+  ): {
+    language: string;
+    phonemes: PhonemeEvent[];
+    visemes: VisemeEvent[];
+    curves: LipSyncCurve[];
+  } {
+    const normalizedPhonemes =
+      this.normalizePhonemes(
+        phonemes,
+      );
+
+    const visemes =
+      this.phonemesToVisemes(
+        normalizedPhonemes,
+      );
+
+    const smoothedVisemes =
+      this.applyCoarticulation(
+        visemes,
+        options.coarticulationTicks ??
+          DEFAULT_COARTICULATION_TICKS,
+        options.coarticulationStrength ??
+          DEFAULT_COARTICULATION_STRENGTH,
+      );
+
+    const curves =
+      this.generateCurves(
+        smoothedVisemes,
+      );
+
+    return {
+      language:
+        normalizeLanguage(
+          language,
+        ),
+
+      phonemes:
+        normalizedPhonemes,
+
+      visemes:
+        smoothedVisemes,
+
+      curves,
+    };
+  }
+
+  /* ------------------------------------------------------------------------ */
+  /* Create Canonical LipSyncTrack                                            */
   /* ------------------------------------------------------------------------ */
 
   createTrack(
@@ -736,67 +1284,91 @@ export class LipSyncEngine {
       >;
       deterministicKey?: string;
       coarticulationTicks?: number;
+      coarticulationStrength?: number;
     } = {},
   ): LipSyncTrack {
-    const normalizedPhonemes =
-      this.normalizePhonemes(
-        phonemes,
-      );
-
-    const normalizedVisemes =
-      this.phonemesToVisemes(
-        normalizedPhonemes,
-      );
-
-    const smoothedVisemes =
-      this.applyCoarticulation(
-        normalizedVisemes,
-        options.coarticulationTicks ??
-          1_000,
-      );
-
-    const curves =
-      this.generateCurves(
-        smoothedVisemes,
-      );
-
     const language =
       normalizeLanguage(
         options.language ??
           "en-IN",
       );
 
-    const input = {
-      language,
-      phonemes:
-        normalizedPhonemes,
-      visemes:
-        smoothedVisemes,
-      analyzer:
-        options.analyzer ??
-        "phoneme-events",
-      version:
-        options.version ??
-        LIP_SYNC_VERSION,
-      alignmentVersion:
-        options.alignmentVersion ??
-        ALIGNMENT_VERSION,
-      manualOverrides:
-        options.manualOverrides ??
-        [],
-      provenance:
-        options.provenance ??
+    const alignment =
+      this.align(
+        phonemes,
+        language,
         {
-          deterministic: true,
+          coarticulationTicks:
+            options.coarticulationTicks ??
+            DEFAULT_COARTICULATION_TICKS,
+
+          coarticulationStrength:
+            options.coarticulationStrength ??
+            DEFAULT_COARTICULATION_STRENGTH,
         },
+      );
+
+    const manualOverrides =
+      (
+        options.manualOverrides ??
+        []
+      ).map(
+        (override) => {
+          this.validateManualOverride(
+            override,
+          );
+
+          return structuredClone(
+            override,
+          );
+        },
+      );
+
+    const analyzer =
+      options.analyzer ??
+      "phoneme-events";
+
+    const version =
+      options.version ??
+      LIP_SYNC_VERSION;
+
+    const alignmentVersion =
+      options.alignmentVersion ??
+      ALIGNMENT_VERSION;
+
+    const provenance = {
+      deterministic: true,
+      ...(options.provenance ??
+        {}),
     };
 
-    const deterministicSource =
+    const source =
       canonicalize({
-        ...input,
+        language,
+
         audioAssetId:
           options.audioAssetId ??
           null,
+
+        analyzer,
+
+        version,
+
+        alignmentVersion,
+
+        phonemes:
+          alignment.phonemes,
+
+        visemes:
+          alignment.visemes,
+
+        curves:
+          alignment.curves,
+
+        manualOverrides,
+
+        provenance,
+
         deterministicKey:
           options.deterministicKey ??
           null,
@@ -804,7 +1376,7 @@ export class LipSyncEngine {
 
     const track: LipSyncTrack = {
       id: deterministicUuid(
-        `lipsync:${deterministicSource}`,
+        `lipsync:${source}`,
       ),
 
       audioAssetId:
@@ -813,47 +1385,41 @@ export class LipSyncEngine {
 
       language,
 
-      analyzer:
-        options.analyzer ??
-        "phoneme-events",
+      analyzer,
 
-      version:
-        options.version ??
-        LIP_SYNC_VERSION,
+      version,
 
       phonemes:
-        normalizedPhonemes,
+        alignment.phonemes,
 
       visemes:
-        smoothedVisemes,
+        alignment.visemes,
 
       curves:
-  curves.map(
-    (curve) =>
-      ({ ...curve }) as Record<
-        string,
-        unknown
-      >,
-  ),
+        alignment.curves.map(
+          (curve) =>
+            ({
+              ...curve,
+            }) as Record<
+              string,
+              unknown
+            >,
+        ),
 
-      alignmentVersion:
-        options.alignmentVersion ??
-        ALIGNMENT_VERSION,
+      alignmentVersion,
 
       manualOverrides:
-  (options.manualOverrides ?? []).map(
-    (override) =>
-      ({ ...override }) as Record<
-        string,
-        unknown
-      >,
-  ),
+        manualOverrides.map(
+          (override) =>
+            ({
+              ...override,
+            }) as Record<
+              string,
+              unknown
+            >,
+        ),
 
-      provenance: {
-        deterministic: true,
-        ...(options.provenance ??
-          {}),
-      },
+      provenance,
     };
 
     return this.validate(
@@ -862,7 +1428,7 @@ export class LipSyncEngine {
   }
 
   /* ------------------------------------------------------------------------ */
-  /* Analyze Phonemes                                                         */
+  /* Phoneme Analysis                                                         */
   /* ------------------------------------------------------------------------ */
 
   analyzePhonemes(
@@ -880,7 +1446,7 @@ export class LipSyncEngine {
   }
 
   /* ------------------------------------------------------------------------ */
-  /* Word Timing Fallback                                                      */
+  /* Word Timing                                                               */
   /* ------------------------------------------------------------------------ */
 
   fromWordTiming(
@@ -891,9 +1457,12 @@ export class LipSyncEngine {
     }>,
     language = "en-IN",
   ): LipSyncTrack {
-    const phonemes: PhonemeEvent[] = [];
+    const phonemes: PhonemeEvent[] =
+      [];
 
-    for (const word of words) {
+    for (
+      const word of words
+    ) {
       if (
         !Number.isInteger(
           word.startTick,
@@ -911,85 +1480,114 @@ export class LipSyncEngine {
       }
 
       const text =
-        word.word
-          .trim()
-          .toUpperCase()
-          .replace(
-            /[^A-Z]/g,
-            "",
-          );
+        word.word.trim();
 
       if (!text) {
         phonemes.push({
           startTick:
             word.startTick,
+
           endTick:
             word.endTick,
+
           phoneme: "SIL",
+
           confidence: 1,
         });
 
         continue;
       }
 
+      /*
+       * Preserve Devanagari characters for Hindi.
+       * Latin transliteration remains supported.
+       */
+
+      const characters =
+        [...text];
+
       const duration =
         word.endTick -
         word.startTick;
 
-      const letters =
-        [...text];
+      if (
+        duration <
+        characters.length
+      ) {
+        throw new Error(
+          `Word "${word.word}" does not have enough ticks for deterministic phoneme segmentation.`,
+        );
+      }
 
-      const segment =
-        duration /
-        letters.length;
+      const base =
+        Math.floor(
+          duration /
+            characters.length,
+        );
 
-      letters.forEach(
-        (
-          letter,
-          index,
-        ) => {
-          const start =
-            Math.round(
-              word.startTick +
-                segment *
-                  index,
-            );
+      let remainder =
+        duration %
+        characters.length;
 
-          const end =
-            Math.round(
-              word.startTick +
-                segment *
-                  (index + 1),
-            );
+      let cursor =
+        word.startTick;
 
-          phonemes.push({
-            startTick:
-              start,
+      for (
+        const character of characters
+      ) {
+        const segment =
+          base +
+          (
+            remainder > 0
+              ? 1
+              : 0
+          );
 
-            endTick:
-              Math.max(
-                start + 1,
-                end,
-              ),
+        if (
+          remainder > 0
+        ) {
+          remainder -= 1;
+        }
 
-            phoneme:
-              this.graphemeToPhoneme(
-                letter,
-                language,
-              ),
+        const start =
+          cursor;
 
-            confidence: 0.55,
-          });
-        },
-      );
+        const end =
+          Math.min(
+            word.endTick,
+            start +
+              segment,
+          );
+
+        cursor =
+          end;
+
+        phonemes.push({
+          startTick:
+            start,
+
+          endTick:
+            end,
+
+          phoneme:
+            this.graphemeToPhoneme(
+              character,
+              language,
+            ),
+
+          confidence: 0.55,
+        });
+      }
     }
 
     return this.createTrack(
       phonemes,
       {
         language,
+
         analyzer:
           "word-timing-grapheme-fallback",
+
         provenance: {
           deterministic: true,
           fallback: true,
@@ -1001,30 +1599,99 @@ export class LipSyncEngine {
   }
 
   /* ------------------------------------------------------------------------ */
-  /* Deterministic Grapheme Fallback                                          */
+  /* Grapheme → Phoneme                                                       */
   /* ------------------------------------------------------------------------ */
 
   graphemeToPhoneme(
     character: string,
     language = "en-IN",
   ): string {
-    const c =
-      character
-        .trim()
-        .toUpperCase();
+    const value =
+      character.trim();
 
-    if (!c) {
+    if (!value) {
       return "SIL";
     }
 
-    /*
-     * This is intentionally a deterministic
-     * fallback, not a linguistic AI model.
-     *
-     * Real phoneme analyzers can be plugged
-     * into the engine later without changing
-     * the canonical LipSyncTrack.
-     */
+    const upper =
+      value.toUpperCase();
+
+    /* ---------------------------------------------------------------------- */
+    /* Devanagari Hindi                                                       */
+    /* ---------------------------------------------------------------------- */
+
+    const hindi: Record<
+      string,
+      string
+    > = {
+      "अ": "AH",
+      "आ": "AA",
+      "इ": "IH",
+      "ई": "EE",
+      "उ": "UH",
+      "ऊ": "UW",
+      "ए": "EH",
+      "ऐ": "AY",
+      "ओ": "AO",
+      "औ": "OW",
+
+      "क": "K",
+      "ख": "K",
+      "ग": "G",
+      "घ": "G",
+
+      "च": "CH",
+      "छ": "CH",
+      "ज": "JH",
+      "झ": "JH",
+
+      "ट": "T",
+      "ठ": "T",
+      "ड": "D",
+      "ढ": "D",
+      "ण": "N",
+
+      "त": "T",
+      "थ": "TH",
+      "द": "D",
+      "ध": "DH",
+      "न": "N",
+
+      "प": "P",
+      "फ": "F",
+      "ब": "B",
+      "भ": "B",
+      "म": "M",
+
+      "य": "Y",
+      "र": "R",
+      "ल": "L",
+      "व": "W",
+
+      "श": "SH",
+      "ष": "SH",
+      "स": "S",
+      "ह": "HH",
+
+      "ं": "N",
+      "ँ": "N",
+      "ः": "HH",
+
+      "्": "SIL",
+    };
+
+    if (
+      language
+        .toLowerCase()
+        .startsWith("hi") &&
+      hindi[value]
+    ) {
+      return hindi[value];
+    }
+
+    /* ---------------------------------------------------------------------- */
+    /* Latin fallback                                                         */
+    /* ---------------------------------------------------------------------- */
 
     const common: Record<
       string,
@@ -1076,20 +1743,22 @@ export class LipSyncEngine {
       };
 
       return (
-        hindiFriendly[c] ??
-        common[c] ??
+        hindiFriendly[
+          upper
+        ] ??
+        common[upper] ??
         "SIL"
       );
     }
 
     return (
-      common[c] ??
+      common[upper] ??
       "SIL"
     );
   }
 
   /* ------------------------------------------------------------------------ */
-  /* Viseme Sampling                                                           */
+  /* Viseme Sampling                                                          */
   /* ------------------------------------------------------------------------ */
 
   visemeAt(
@@ -1097,11 +1766,49 @@ export class LipSyncEngine {
     tick: number,
   ): VisemeSample {
     if (
-      !Number.isInteger(tick)
+      !Number.isInteger(
+        tick,
+      )
     ) {
       throw new Error(
         "Lip-sync tick must be an integer.",
       );
+    }
+
+    const overrides =
+      this.activeOverrides(
+        track,
+        tick,
+      );
+
+    if (
+      overrides.length > 0
+    ) {
+      const override =
+        [...overrides].sort(
+          (a, b) =>
+            (b.weight ?? 1) -
+            (a.weight ?? 1),
+        )[0];
+
+      if (
+        override.viseme
+      ) {
+        return {
+          viseme:
+            this.resolveOverrideViseme(
+              override.viseme,
+            ),
+
+          weight:
+            clamp(
+              override.weight ??
+                1,
+              0,
+              1,
+            ),
+        };
+      }
     }
 
     const active =
@@ -1122,33 +1829,19 @@ export class LipSyncEngine {
       };
     }
 
-    if (
-      active.length === 1
-    ) {
-      return {
-        viseme:
-          active[0].viseme,
-
-        weight:
-          clamp(
-            active[0].weight,
-            0,
-            1,
-          ),
-      };
-    }
-
-    /*
-     * Multiple overlapping visemes are
-     * resolved deterministically using
-     * highest effective confidence.
-     */
-
     const best =
       [...active].sort(
         (a, b) =>
           b.weight -
-          a.weight,
+            a.weight ||
+          (
+            b.endTick -
+            b.startTick
+          ) -
+            (
+              a.endTick -
+              a.startTick
+            ),
       )[0];
 
     return {
@@ -1173,12 +1866,19 @@ export class LipSyncEngine {
     tick: number,
   ): LipSyncControls {
     if (
-      !Number.isInteger(tick)
+      !Number.isInteger(
+        tick,
+      )
     ) {
       throw new Error(
         "Lip-sync tick must be an integer.",
       );
     }
+
+    const output: Record<
+      string,
+      number
+    > = {};
 
     const active =
       track.visemes.filter(
@@ -1189,41 +1889,113 @@ export class LipSyncEngine {
             viseme.endTick,
       );
 
-    const output: Record<
-      string,
-      number
-    > = {};
-
-    if (
-      active.length === 0
+    for (
+      const viseme of active
     ) {
-      return {
-        controls: output,
-      };
-    }
+      const controls =
+        this.getControlMapping(
+          viseme.viseme,
+        );
 
-    for (const viseme of active) {
-      const mapping =
-        VISEME_TO_CONTROLS[
-          viseme.viseme
-        ] ??
-        VISEME_TO_CONTROLS.REST;
-
-      for (const [
-        control,
-        value,
-      ] of Object.entries(
-        mapping,
-      )) {
+      for (
+        const [
+          control,
+          value,
+        ] of Object.entries(
+          controls,
+        )
+      ) {
         output[control] =
-          (output[control] ??
-            0) +
+          (
+            output[control] ??
+            0
+          ) +
           value *
             viseme.weight;
       }
     }
 
-    for (const key of Object.keys(output)) {
+    /*
+     * Manual overrides have the highest priority.
+     */
+
+    const overrides =
+      this.activeOverrides(
+        track,
+        tick,
+      );
+
+    for (
+      const override of overrides
+    ) {
+      const overrideWeight =
+        clamp(
+          override.weight ??
+            1,
+          0,
+          1,
+        );
+
+      if (
+        override.controls
+      ) {
+        for (
+          const [
+            control,
+            value,
+          ] of Object.entries(
+            override.controls,
+          )
+        ) {
+          output[control] =
+            clamp(
+              value *
+                overrideWeight,
+              -1,
+              1,
+            );
+        }
+
+        continue;
+      }
+
+      if (
+        override.viseme
+      ) {
+        const viseme =
+          this.resolveOverrideViseme(
+            override.viseme,
+          );
+
+        const controls =
+          this.getControlMapping(
+            viseme,
+          );
+
+        for (
+          const [
+            control,
+            value,
+          ] of Object.entries(
+            controls,
+          )
+        ) {
+          output[control] =
+            clamp(
+              value *
+                overrideWeight,
+              -1,
+              1,
+            );
+        }
+      }
+    }
+
+    for (
+      const key of Object.keys(
+        output,
+      )
+    ) {
       output[key] =
         clamp(
           output[key],
@@ -1241,90 +2013,171 @@ export class LipSyncEngine {
   }
 
   /* ------------------------------------------------------------------------ */
-  /* Manual Overrides                                                          */
+  /* Manual Overrides                                                         */
   /* ------------------------------------------------------------------------ */
+
+  private validateManualOverride(
+    override: ManualOverride,
+  ): void {
+    if (
+      !Number.isInteger(
+        override.startTick,
+      ) ||
+      !Number.isInteger(
+        override.endTick,
+      ) ||
+      override.startTick < 0 ||
+      override.endTick <=
+        override.startTick
+    ) {
+      throw new Error(
+        "Invalid lip-sync manual override timing.",
+      );
+    }
+
+    if (
+      override.weight !==
+        undefined &&
+      (
+        !Number.isFinite(
+          override.weight,
+        ) ||
+        override.weight < 0 ||
+        override.weight > 1
+      )
+    ) {
+      throw new Error(
+        "Manual override weight must be between 0 and 1.",
+      );
+    }
+
+    if (
+      override.viseme !==
+        undefined &&
+      override.viseme.trim()
+        .length === 0
+    ) {
+      throw new Error(
+        "Manual override viseme must not be empty.",
+      );
+    }
+
+    if (
+      override.controls
+    ) {
+      for (
+        const [
+          control,
+          value,
+        ] of Object.entries(
+          override.controls,
+        )
+      ) {
+        if (
+          !Number.isFinite(
+            value,
+          )
+        ) {
+          throw new Error(
+            `Manual override control "${control}" must be finite.`,
+          );
+        }
+      }
+    }
+  }
+
+  private activeOverrides(
+    track: LipSyncTrack,
+    tick: number,
+  ): ManualOverride[] {
+    return (
+      (
+        track.manualOverrides as
+        unknown as ManualOverride[]
+      ) ?? []
+    ).filter(
+      (override) =>
+        tick >=
+          override.startTick &&
+        tick <
+          override.endTick,
+    );
+  }
+
+  private resolveOverrideViseme(
+    value: string,
+  ): string {
+    const normalized =
+      normalizePhoneme(
+        value,
+      );
+
+    if (
+      PHONEME_TO_VISEME[
+        normalized
+      ]
+    ) {
+      return this.phonemeToViseme(
+        normalized,
+      );
+    }
+
+    const upper =
+      value
+        .trim()
+        .toUpperCase();
+
+    return VISEME_TO_CONTROLS[
+      upper
+    ]
+      ? upper
+      : "REST";
+  }
 
   applyManualOverrides(
     track: LipSyncTrack,
     overrides: ManualOverride[],
   ): LipSyncTrack {
-    const next =
-      structuredClone(
+    const validated =
+      this.validate(
         track,
       );
 
-    const merged =
-      [
-        ...next.manualOverrides,
-        ...overrides,
-      ];
-
-    for (const override of overrides) {
-      if (
-        !Number.isInteger(
-          override.startTick,
-        ) ||
-        !Number.isInteger(
-          override.endTick,
-        ) ||
-        override.startTick < 0 ||
-        override.endTick <=
-          override.startTick
-      ) {
-        throw new Error(
-          "Invalid lip-sync manual override timing.",
-        );
-      }
-
-      if (
-        override.weight !==
-          undefined &&
-        (!Number.isFinite(
-          override.weight,
-        ) ||
-          override.weight < 0 ||
-          override.weight > 1)
-      ) {
-        throw new Error(
-          "Manual override weight must be between 0 and 1.",
-        );
-      }
-
-      if (
-        override.viseme !==
-          undefined &&
-        override.viseme.trim()
-          .length === 0
-      ) {
-        throw new Error(
-          "Manual override viseme must not be empty.",
-        );
-      }
-
-      if (
-        override.controls
-      ) {
-        for (const value of Object.values(
-          override.controls,
-        )) {
-          if (
-            !Number.isFinite(
-              value,
-            )
-          ) {
-            throw new Error(
-              "Manual override facial controls must be finite.",
-            );
-          }
-        }
-      }
+    for (
+      const override of overrides
+    ) {
+      this.validateManualOverride(
+        override,
+      );
     }
 
+    const next =
+      structuredClone(
+        validated,
+      );
+
+    const existing =
+      (
+        next.manualOverrides as
+        unknown as ManualOverride[]
+      ) ?? [];
+
+    const merged =
+      [
+        ...existing,
+        ...overrides.map(
+          (override) =>
+            structuredClone(
+              override,
+            ),
+        ),
+      ];
+
     next.manualOverrides =
-      merged as Record<
-        string,
-        unknown
-      >[];
+      merged as unknown as
+        LipSyncTrack[
+          "manualOverrides"
+        ];
 
     return this.validate(
       next,
@@ -1332,7 +2185,79 @@ export class LipSyncEngine {
   }
 
   /* ------------------------------------------------------------------------ */
-  /* Validation                                                                */
+  /* Curve Sampling                                                           */
+  /* ------------------------------------------------------------------------ */
+
+  sampleCurve(
+    curve: LipSyncCurve,
+    tick: number,
+  ): number {
+    if (
+      !Number.isFinite(
+        tick,
+      )
+    ) {
+      throw new Error(
+        "Lip-sync curve sample tick must be finite.",
+      );
+    }
+
+    if (
+      tick <=
+      curve.startTick
+    ) {
+      return curve.startValue;
+    }
+
+    if (
+      tick >=
+      curve.endTick
+    ) {
+      return curve.endValue;
+    }
+
+    const span =
+      curve.endTick -
+      curve.startTick;
+
+    if (
+      span <= 0
+    ) {
+      return curve.endValue;
+    }
+
+    const t =
+      (
+        tick -
+        curve.startTick
+      ) /
+      span;
+
+    switch (
+      curve.interpolation
+    ) {
+      case "step":
+        return curve.startValue;
+
+      case "smooth":
+        return lerp(
+          curve.startValue,
+          curve.endValue,
+          smoothstep(t),
+        );
+
+      case "linear":
+      default:
+        return lerp(
+          curve.startValue,
+          curve.endValue,
+          t,
+        );
+    }
+  }
+
+  /* ------------------------------------------------------------------------ */
+  /* Track Validation                                                         */
   /* ------------------------------------------------------------------------ */
 
   validate(
@@ -1343,7 +2268,9 @@ export class LipSyncEngine {
         track,
       );
 
-    if (!result.valid) {
+    if (
+      !result.valid
+    ) {
       throw new Error(
         `Invalid lip-sync track: ${result.errors.join("; ")}`,
       );
@@ -1357,14 +2284,17 @@ export class LipSyncEngine {
   validateResult(
     track: LipSyncTrack,
   ): LipSyncValidationResult {
-    const errors: string[] = [];
+    const errors: string[] =
+      [];
 
     const parsed =
       LipSyncTrackSchema.safeParse(
         track,
       );
 
-    if (!parsed.success) {
+    if (
+      !parsed.success
+    ) {
       errors.push(
         ...parsed.error.issues.map(
           (issue) =>
@@ -1384,42 +2314,12 @@ export class LipSyncEngine {
       track.phonemes.length;
       i += 1
     ) {
-      const phoneme =
-        track.phonemes[i];
-
-      if (
-        !Number.isInteger(
-          phoneme.startTick,
-        ) ||
-        phoneme.startTick < 0
-      ) {
-        errors.push(
-          `phonemes[${i}].startTick is invalid.`,
-        );
-      }
-
-      if (
-        !Number.isInteger(
-          phoneme.endTick,
-        ) ||
-        phoneme.endTick <=
-          phoneme.startTick
-      ) {
-        errors.push(
-          `phonemes[${i}].endTick is invalid.`,
-        );
-      }
-
-      if (
-        phoneme.confidence <
-          0 ||
-        phoneme.confidence >
-          1
-      ) {
-        errors.push(
-          `phonemes[${i}].confidence is invalid.`,
-        );
-      }
+      errors.push(
+        ...validatePhonemeEvent(
+          track.phonemes[i],
+          i,
+        ),
+      );
     }
 
     for (
@@ -1428,34 +2328,146 @@ export class LipSyncEngine {
       track.visemes.length;
       i += 1
     ) {
-      const viseme =
-        track.visemes[i];
+      errors.push(
+        ...validateVisemeEvent(
+          track.visemes[i],
+          i,
+        ),
+      );
+    }
 
-      if (
-        viseme.startTick < 0 ||
-        viseme.endTick <=
-          viseme.startTick
+    for (
+      let i = 0;
+      i <
+      track.manualOverrides
+        .length;
+      i += 1
+    ) {
+      try {
+        this.validateManualOverride(
+          track.manualOverrides[
+            i
+          ] as unknown as ManualOverride,
+        );
+      } catch (
+        error
       ) {
         errors.push(
-          `visemes[${i}] timing is invalid.`,
+          `manualOverrides[${i}]: ${
+            error instanceof Error
+              ? error.message
+              : String(error)
+          }`,
+        );
+      }
+    }
+
+    for (
+      let i = 0;
+      i <
+      track.curves.length;
+      i += 1
+    ) {
+      const curve =
+        track.curves[
+          i
+        ] as unknown as LipSyncCurve;
+
+      if (
+        !Number.isInteger(
+          curve.startTick,
+        ) ||
+        !Number.isInteger(
+          curve.endTick,
+        ) ||
+        curve.startTick < 0 ||
+        curve.endTick <=
+          curve.startTick
+      ) {
+        errors.push(
+          `curves[${i}] timing is invalid.`,
         );
       }
 
       if (
-        viseme.weight < 0 ||
-        viseme.weight > 1
-      ) {
-        errors.push(
-          `visemes[${i}].weight is invalid.`,
-        );
-      }
-
-      if (
-        viseme.viseme.trim()
+        typeof curve.targetPath !==
+          "string" ||
+        curve.targetPath.trim()
           .length === 0
       ) {
         errors.push(
-          `visemes[${i}].viseme must not be empty.`,
+          `curves[${i}].targetPath must not be empty.`,
+        );
+      }
+
+      if (
+        !Number.isFinite(
+          curve.startValue,
+        ) ||
+        !Number.isFinite(
+          curve.endValue,
+        )
+      ) {
+        errors.push(
+          `curves[${i}] values must be finite.`,
+        );
+      }
+
+      if (
+        ![
+          "linear",
+          "smooth",
+          "step",
+        ].includes(
+          curve.interpolation,
+        )
+      ) {
+        errors.push(
+          `curves[${i}].interpolation is invalid.`,
+        );
+      }
+    }
+
+    /*
+     * Canonical ordering checks.
+     */
+
+    for (
+      let i = 0;
+      i <
+      track.phonemes.length -
+        1;
+      i += 1
+    ) {
+      if (
+        track.phonemes[i]
+          .startTick >
+        track.phonemes[
+          i + 1
+        ].startTick
+      ) {
+        errors.push(
+          "Phoneme events must be ordered by startTick.",
+        );
+      }
+    }
+
+    for (
+      let i = 0;
+      i <
+      track.visemes.length -
+        1;
+      i += 1
+    ) {
+      if (
+        track.visemes[i]
+          .startTick >
+        track.visemes[
+          i + 1
+        ].startTick
+      ) {
+        errors.push(
+          "Viseme events must be ordered by startTick.",
         );
       }
     }
@@ -1463,12 +2475,13 @@ export class LipSyncEngine {
     return {
       valid:
         errors.length === 0,
+
       errors,
     };
   }
 
   /* ------------------------------------------------------------------------ */
-  /* Fingerprint                                                               */
+  /* Fingerprint                                                              */
   /* ------------------------------------------------------------------------ */
 
   fingerprint(
@@ -1491,7 +2504,7 @@ export class LipSyncEngine {
   }
 
   /* ------------------------------------------------------------------------ */
-  /* Deterministic Check                                                       */
+  /* Determinism                                                              */
   /* ------------------------------------------------------------------------ */
 
   isDeterministic(
@@ -1517,6 +2530,24 @@ export class LipSyncEngine {
       this.fingerprint(
         second,
       )
+    );
+  }
+
+  /* ------------------------------------------------------------------------ */
+  /* Public Definitions                                                       */
+  /* ------------------------------------------------------------------------ */
+
+  getVisemeDefinitions(): VisemeDefinition[] {
+    return structuredClone(
+      VISEME_DEFINITIONS,
+    );
+  }
+
+  getPhonemeMapping(
+    phoneme: string,
+  ): string {
+    return this.phonemeToViseme(
+      phoneme,
     );
   }
 }
