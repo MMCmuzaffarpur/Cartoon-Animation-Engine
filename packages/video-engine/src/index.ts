@@ -47,14 +47,21 @@ export interface VideoOptions {
 
 export interface VideoRenderResult {
   path: string;
+
   width: number;
   height: number;
+
   fps: number;
+
   frameCount: number;
+
   startTick: number;
   endTick: number;
+
   tickRate: number;
+
   renderer: "svg-ffmpeg";
+
   version: "1.0.0";
 }
 
@@ -62,169 +69,193 @@ export interface VideoRenderResult {
 /* Constants                                                                  */
 /* -------------------------------------------------------------------------- */
 
-const VIDEO_ENGINE_VERSION = "1.0.0" as const;
+const VIDEO_ENGINE_VERSION =
+  "1.0.0" as const;
 
-const DEFAULT_WIDTH = 1280;
-const DEFAULT_HEIGHT = 720;
-const DEFAULT_FPS = 30;
-const DEFAULT_TICK_RATE = 1000;
+const DEFAULT_WIDTH =
+  1280;
 
-const MIN_FPS = 1;
-const MAX_FPS = 120;
+const DEFAULT_HEIGHT =
+  720;
 
-const MIN_DIMENSION = 1;
-const MAX_DIMENSION = 16_384;
+const DEFAULT_FPS =
+  30;
 
-const MAX_TEMP_ERROR_LENGTH = 32_768;
+const DEFAULT_TICK_RATE =
+  1000;
+
+const MIN_FPS =
+  1;
+
+const MAX_FPS =
+  120;
+
+const MIN_DIMENSION =
+  1;
+
+const MAX_DIMENSION =
+  16_384;
+
+const MAX_TEMP_ERROR_LENGTH =
+  32_768;
+
+/* -------------------------------------------------------------------------- */
+/* Internal Types                                                             */
+/* -------------------------------------------------------------------------- */
+
+type UnknownRecord =
+  Record<string, unknown>;
 
 /* -------------------------------------------------------------------------- */
 /* Helpers                                                                    */
 /* -------------------------------------------------------------------------- */
 
-function finiteNumber(
+function isRecord(
   value: unknown,
-  fallback: number,
-): number {
+): value is UnknownRecord {
   return (
-    typeof value === "number" &&
-    Number.isFinite(value)
-  )
-    ? value
-    : fallback;
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value)
+  );
 }
 
-function positiveInteger(
+function clone<T>(
+  value: T,
+): T {
+  return structuredClone(
+    value,
+  );
+}
+
+function requireNonEmptyString(
   value: unknown,
-  fallback: number,
+  field: string,
+): string {
+  if (
+    typeof value !== "string" ||
+    value.trim().length === 0
+  ) {
+    throw new CaeError(
+      "RENDER_FAILED",
+      `${field} must be a non-empty string.`,
+    );
+  }
+
+  return value.trim();
+}
+
+function requireFiniteNumber(
+  value: unknown,
+  field: string,
+): number {
+  if (
+    typeof value !== "number" ||
+    !Number.isFinite(value)
+  ) {
+    throw new CaeError(
+      "RENDER_FAILED",
+      `${field} must be a finite number.`,
+    );
+  }
+
+  return value;
+}
+
+function requireInteger(
+  value: unknown,
+  field: string,
 ): number {
   const number =
-    finiteNumber(
+    requireFiniteNumber(
       value,
-      fallback,
+      field,
     );
 
   if (
-    !Number.isFinite(number) ||
-    number <= 0
+    !Number.isInteger(number)
   ) {
-    return fallback;
+    throw new CaeError(
+      "RENDER_FAILED",
+      `${field} must be an integer.`,
+    );
   }
 
-  return Math.floor(number);
+  return number;
 }
 
-function clamp(
-  value: number,
-  min: number,
-  max: number,
-): number {
-  return Math.min(
-    max,
-    Math.max(
-      min,
-      value,
-    ),
-  );
-}
-
-function positiveFinite(
+function requirePositiveInteger(
   value: unknown,
-  fallback: number,
+  field: string,
 ): number {
   const number =
-    finiteNumber(
+    requireInteger(
       value,
-      fallback,
+      field,
     );
 
-  return number > 0
-    ? number
-    : fallback;
+  if (
+    number <= 0
+  ) {
+    throw new CaeError(
+      "RENDER_FAILED",
+      `${field} must be greater than zero.`,
+    );
+  }
+
+  return number;
 }
 
-/* -------------------------------------------------------------------------- */
-/* FFmpeg Runner                                                              */
-/* -------------------------------------------------------------------------- */
+function requirePositiveFinite(
+  value: unknown,
+  field: string,
+): number {
+  const number =
+    requireFiniteNumber(
+      value,
+      field,
+    );
 
-function runProcess(
-  command: string,
-  args: string[],
-): Promise<void> {
-  return new Promise(
-    (
-      resolveProcess,
-      rejectProcess,
-    ) => {
-      const process =
-        spawn(
-          command,
-          args,
-          {
-            stdio: [
-              "ignore",
-              "ignore",
-              "pipe",
-            ],
+  if (
+    number <= 0
+  ) {
+    throw new CaeError(
+      "RENDER_FAILED",
+      `${field} must be greater than zero.`,
+    );
+  }
 
-            windowsHide:
-              true,
-          },
-        );
-
-      let stderr = "";
-
-      process.stderr.on(
-        "data",
-        (chunk) => {
-          stderr +=
-            String(chunk);
-
-          if (
-            stderr.length >
-            MAX_TEMP_ERROR_LENGTH
-          ) {
-            stderr =
-              stderr.slice(
-                -MAX_TEMP_ERROR_LENGTH,
-              );
-          }
-        },
-      );
-
-      process.on(
-        "error",
-        (error) => {
-          rejectProcess(
-            error,
-          );
-        },
-      );
-
-      process.on(
-        "close",
-        (code) => {
-          if (
-            code === 0
-          ) {
-            resolveProcess();
-            return;
-          }
-
-          rejectProcess(
-            new Error(
-              stderr.trim() ||
-              `FFmpeg exited with code ${String(code)}.`,
-            ),
-          );
-        },
-      );
-    },
-  );
+  return number;
 }
 
-/* -------------------------------------------------------------------------- */
-/* Frame Count                                                                */
-/* -------------------------------------------------------------------------- */
+function assertDimension(
+  value: number,
+  field: string,
+): void {
+  if (
+    value < MIN_DIMENSION ||
+    value > MAX_DIMENSION
+  ) {
+    throw new CaeError(
+      "RENDER_FAILED",
+      `${field} must be between ${MIN_DIMENSION} and ${MAX_DIMENSION}.`,
+    );
+  }
+}
+
+function assertFps(
+  value: number,
+): void {
+  if (
+    value < MIN_FPS ||
+    value > MAX_FPS
+  ) {
+    throw new CaeError(
+      "RENDER_FAILED",
+      `Video FPS must be between ${MIN_FPS} and ${MAX_FPS}.`,
+    );
+  }
+}
 
 function calculateFrameCount(
   startTick: number,
@@ -241,23 +272,22 @@ function calculateFrameCount(
     tickRate;
 
   /*
-   * A frame exists for each sampled presentation timestamp.
+   * The render range is [startTick, endTick).
    *
-   * ceil() guarantees that a non-zero duration cannot accidentally
-   * produce zero frames.
+   * ceil() ensures that a positive duration always produces
+   * at least one presentation frame.
    */
-  return Math.max(
-    1,
+  const count =
     Math.ceil(
       durationSeconds *
       fps,
-    ),
+    );
+
+  return Math.max(
+    1,
+    count,
   );
 }
-
-/* -------------------------------------------------------------------------- */
-/* Tick Calculation                                                            */
-/* -------------------------------------------------------------------------- */
 
 function tickForFrame(
   frameIndex: number,
@@ -265,14 +295,132 @@ function tickForFrame(
   tickRate: number,
   fps: number,
 ): number {
-  const tick =
+  const exactTick =
     startTick +
-    frameIndex *
-      tickRate /
+    (
+      frameIndex *
+      tickRate
+    ) /
       fps;
 
   return Math.round(
-    tick,
+    exactTick,
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* FFmpeg Runner                                                              */
+/* -------------------------------------------------------------------------- */
+
+function runProcess(
+  command: string,
+  args: string[],
+): Promise<void> {
+  return new Promise(
+    (
+      resolveProcess,
+      rejectProcess,
+    ) => {
+      let settled =
+        false;
+
+      const child =
+        spawn(
+          command,
+          args,
+          {
+            stdio: [
+              "ignore",
+              "ignore",
+              "pipe",
+            ],
+
+            windowsHide:
+              true,
+          },
+        );
+
+      let stderr =
+        "";
+
+      const rejectOnce =
+        (
+          error: Error,
+        ): void => {
+          if (
+            settled
+          ) {
+            return;
+          }
+
+          settled =
+            true;
+
+          rejectProcess(
+            error,
+          );
+        };
+
+      const resolveOnce =
+        (): void => {
+          if (
+            settled
+          ) {
+            return;
+          }
+
+          settled =
+            true;
+
+          resolveProcess();
+        };
+
+      child.stderr?.on(
+        "data",
+        (chunk: unknown) => {
+          stderr +=
+            String(chunk);
+
+          if (
+            stderr.length >
+            MAX_TEMP_ERROR_LENGTH
+          ) {
+            stderr =
+              stderr.slice(
+                -MAX_TEMP_ERROR_LENGTH,
+              );
+          }
+        },
+      );
+
+      child.on(
+        "error",
+        (error) => {
+          rejectOnce(
+            error,
+          );
+        },
+      );
+
+      child.on(
+        "close",
+        (code) => {
+          if (
+            code === 0
+          ) {
+            resolveOnce();
+            return;
+          }
+
+          rejectOnce(
+            new Error(
+              stderr.trim() ||
+              `FFmpeg exited with code ${String(code)}.`,
+            ),
+          );
+        },
+      );
+    },
   );
 }
 
@@ -300,8 +448,7 @@ export class VideoEngine {
     options: VideoOptions,
   ): VideoOptions {
     if (
-      !options ||
-      typeof options !== "object"
+      !isRecord(options)
     ) {
       throw new CaeError(
         "RENDER_FAILED",
@@ -309,96 +456,66 @@ export class VideoEngine {
       );
     }
 
-    if (
-      typeof options.ffmpeg !== "string" ||
-      options.ffmpeg.trim().length === 0
-    ) {
-      throw new CaeError(
-        "RENDER_FAILED",
-        "FFmpeg executable path must not be empty.",
+    const ffmpeg =
+      requireNonEmptyString(
+        options.ffmpeg,
+        "FFmpeg executable path",
       );
-    }
 
-    if (
-      typeof options.output !== "string" ||
-      options.output.trim().length === 0
-    ) {
-      throw new CaeError(
-        "RENDER_FAILED",
-        "Video output path must not be empty.",
+    const output =
+      requireNonEmptyString(
+        options.output,
+        "Video output path",
       );
-    }
 
     const width =
-      positiveInteger(
+      requirePositiveInteger(
         options.width,
-        DEFAULT_WIDTH,
+        "Video width",
       );
 
     const height =
-      positiveInteger(
+      requirePositiveInteger(
         options.height,
-        DEFAULT_HEIGHT,
+        "Video height",
       );
 
-    if (
-      width <
-        MIN_DIMENSION ||
-      width >
-        MAX_DIMENSION
-    ) {
-      throw new CaeError(
-        "RENDER_FAILED",
-        `Video width must be between ${MIN_DIMENSION} and ${MAX_DIMENSION}.`,
-      );
-    }
+    assertDimension(
+      width,
+      "Video width",
+    );
 
-    if (
-      height <
-        MIN_DIMENSION ||
-      height >
-        MAX_DIMENSION
-    ) {
-      throw new CaeError(
-        "RENDER_FAILED",
-        `Video height must be between ${MIN_DIMENSION} and ${MAX_DIMENSION}.`,
-      );
-    }
+    assertDimension(
+      height,
+      "Video height",
+    );
 
     const fps =
-      positiveFinite(
+      requirePositiveFinite(
         options.fps,
-        DEFAULT_FPS,
+        "Video FPS",
       );
 
-    if (
-      fps <
-        MIN_FPS ||
-      fps >
-        MAX_FPS
-    ) {
-      throw new CaeError(
-        "RENDER_FAILED",
-        `Video FPS must be between ${MIN_FPS} and ${MAX_FPS}.`,
-      );
-    }
+    assertFps(
+      fps,
+    );
 
     const tickRate =
-      positiveFinite(
+      requirePositiveFinite(
         options.tickRate,
-        DEFAULT_TICK_RATE,
+        "Video tickRate",
       );
 
     const startTick =
-      finiteNumber(
+      requireFiniteNumber(
         options.startTick,
-        0,
+        "Video startTick",
       );
 
     const endTick =
-      finiteNumber(
+      requireFiniteNumber(
         options.endTick,
-        0,
+        "Video endTick",
       );
 
     if (
@@ -412,16 +529,16 @@ export class VideoEngine {
     }
 
     return {
-      ffmpeg:
-        options.ffmpeg.trim(),
+      ffmpeg,
 
       output:
         resolve(
-          options.output,
+          output,
         ),
 
       width,
       height,
+
       fps,
 
       startTick,
@@ -436,7 +553,7 @@ export class VideoEngine {
   /* ------------------------------------------------------------------------ */
 
   async renderMp4(
-    project: any,
+    project: unknown,
     revisionId: string,
     options: VideoOptions,
   ): Promise<VideoRenderResult> {
@@ -450,20 +567,16 @@ export class VideoEngine {
       project === undefined
     ) {
       throw new CaeError(
-        "RENDER_FAILED",
+         "RENDER_FAILED",
         "Project is required for video rendering.",
       );
     }
 
-    if (
-      typeof revisionId !== "string" ||
-      revisionId.trim().length === 0
-    ) {
-      throw new CaeError(
-        "RENDER_FAILED",
-        "Revision ID is required for video rendering.",
+    const normalizedRevisionId =
+      requireNonEmptyString(
+        revisionId,
+        "Revision ID",
       );
-    }
 
     const outputDirectory =
       dirname(
@@ -473,15 +586,15 @@ export class VideoEngine {
     await mkdir(
       outputDirectory,
       {
-        recursive: true,
+        recursive:
+          true,
       },
     );
 
     /*
-     * mkdtemp() gives us a unique temporary directory.
+     * A dedicated temporary directory is created for every render.
      *
-     * This is safer than Date.now() because two render jobs can start
-     * within the same millisecond.
+     * This prevents concurrent renders from sharing frame files.
      */
     const tempRoot =
       join(
@@ -492,7 +605,8 @@ export class VideoEngine {
     await mkdir(
       tempRoot,
       {
-        recursive: true,
+        recursive:
+          true,
       },
     );
 
@@ -514,12 +628,13 @@ export class VideoEngine {
 
     try {
       /* -------------------------------------------------------------------- */
-      /* Generate deterministic frames                                       */
+      /* Deterministic frame generation                                      */
       /* -------------------------------------------------------------------- */
 
       for (
         let frameIndex = 0;
-        frameIndex < frameCount;
+        frameIndex <
+        frameCount;
         frameIndex += 1
       ) {
         const tick =
@@ -533,9 +648,12 @@ export class VideoEngine {
         const state =
           this.evaluator.evaluate(
             {
-              project,
+              project:
+                clone(project),
+
               revisionId:
-                revisionId.trim(),
+                normalizedRevisionId,
+
               tick,
             },
           );
@@ -569,7 +687,7 @@ export class VideoEngine {
       }
 
       /* -------------------------------------------------------------------- */
-      /* Encode frames with FFmpeg                                            */
+      /* FFmpeg encoding                                                       */
       /* -------------------------------------------------------------------- */
 
       const inputPattern =
@@ -650,7 +768,15 @@ export class VideoEngine {
         version:
           VIDEO_ENGINE_VERSION,
       };
-    } catch (error) {
+    } catch (
+      error
+    ) {
+      if (
+        error instanceof CaeError
+      ) {
+        throw error;
+      }
+
       const message =
         error instanceof Error
           ? error.message
@@ -662,13 +788,16 @@ export class VideoEngine {
       );
     } finally {
       /*
-       * Cleanup happens whether frame generation or FFmpeg fails.
+       * Temporary SVG frames must never remain after the job finishes.
        */
       await rm(
         frameDirectory,
         {
-          recursive: true,
-          force: true,
+          recursive:
+            true,
+
+          force:
+            true,
         },
       );
     }
