@@ -1,19 +1,1274 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-export interface SvgRenderOptions {width:number;height:number;transparent?:boolean}
-const esc=(s:string)=>s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/"/g,"&quot;");
-export class SvgRenderer {
-  render(state:any,options:SvgRenderOptions){
-    const {width,height}=options; const bg=state.entities?.find((e:any)=>e.type==="scene")?.components?.background?.color ?? "#87CEEB";
-    const rect=options.transparent?"":`<rect width="100%" height="100%" fill="${bg}"/>`;
-    const parts:string[]=[`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">${rect}`];
-    const scale=state.camera?.zoom??1;
-    for(const e of state.entities??[]){const p=e.transform?.position??{x:width/2,y:height/2,z:0};const c=e.components??{};const x=p.x||width/2,y=p.y||height/2;
-      if(e.type==="character"){const skin=e.components?.skin??"#F1C7A8",hair=e.components?.hairColor??"#24170F",top=e.components?.topColor??"#3A6EA5";const smile=e.evaluation?.facial?.smile??0;const mouth=Math.max(6,12+smile*6);
-        parts.push(`<g transform="translate(${x},${y}) scale(${scale})"><ellipse cx="0" cy="90" rx="42" ry="12" fill="#000" opacity=".15"/><rect x="-30" y="20" width="60" height="70" rx="18" fill="${top}"/><circle cx="0" cy="-25" r="48" fill="${skin}"/><path d="M-45-28 Q0-75 45-28 L38-58 Q0-88-38-58Z" fill="${hair}"/><circle cx="-17" cy="-25" r="6" fill="#222"/><circle cx="17" cy="-25" r="6" fill="#222"/><path d="M-18 5 Q0 ${5+mouth} 18 5" fill="none" stroke="#5A2630" stroke-width="5" stroke-linecap="round"/></g>`);
-      } else if(e.type==="prop"){const w=c.width??100,h=c.height??60,color=c.color??"#9B6B43";parts.push(`<g><rect x="${x-w/2}" y="${y-h/2}" width="${w}" height="${h}" rx="6" fill="${color}"/><text x="${x}" y="${y+5}" text-anchor="middle" font-family="sans-serif" font-size="16" fill="#fff">${esc(e.name)}</text></g>`);}
-    }
-    parts.push("</svg>"); return parts.join("");
+
+/* -------------------------------------------------------------------------- */
+/* Public Types                                                               */
+/* -------------------------------------------------------------------------- */
+
+export interface SvgRenderOptions {
+  width: number;
+  height: number;
+  transparent?: boolean;
+  backgroundColor?: string;
+  includeMetadata?: boolean;
+}
+
+export interface Render2DResult {
+  svg: string;
+  width: number;
+  height: number;
+  renderer: "svg";
+  version: "1.0.0";
+}
+
+interface Vec2 {
+  x: number;
+  y: number;
+}
+
+interface Vec3 {
+  x: number;
+  y: number;
+  z: number;
+}
+
+interface Transform {
+  position?: Partial<Vec3>;
+  rotation?: Partial<Vec3>;
+  scale?: Partial<Vec3>;
+}
+
+interface RenderEntity {
+  id?: string;
+  type?: string;
+  name?: string;
+  transform?: Transform;
+  components?: Record<string, unknown>;
+  evaluation?: {
+    motion?: Record<string, number>;
+    facial?: Record<string, number>;
+    viseme?: {
+      viseme?: string;
+      weight?: number;
+    } | null;
+  };
+}
+
+/* -------------------------------------------------------------------------- */
+/* Constants                                                                  */
+/* -------------------------------------------------------------------------- */
+
+const RENDERER_VERSION = "1.0.0" as const;
+
+const DEFAULT_WIDTH = 1280;
+const DEFAULT_HEIGHT = 720;
+const DEFAULT_BACKGROUND = "#87CEEB";
+
+const DEFAULT_SKIN = "#F1C7A8";
+const DEFAULT_HAIR = "#24170F";
+const DEFAULT_TOP = "#3A6EA5";
+
+const EPSILON = 0.000001;
+
+/* -------------------------------------------------------------------------- */
+/* Safe Helpers                                                               */
+/* -------------------------------------------------------------------------- */
+
+function finiteNumber(
+  value: unknown,
+  fallback: number,
+): number {
+  return typeof value === "number" &&
+    Number.isFinite(value)
+    ? value
+    : fallback;
+}
+
+function positiveNumber(
+  value: unknown,
+  fallback: number,
+): number {
+  const n = finiteNumber(value, fallback);
+
+  return n > 0 ? n : fallback;
+}
+
+function clamp(
+  value: number,
+  min: number,
+  max: number,
+): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function asString(
+  value: unknown,
+  fallback = "",
+): string {
+  return typeof value === "string"
+    ? value
+    : fallback;
+}
+
+function color(
+  value: unknown,
+  fallback: string,
+): string {
+  const candidate = asString(value, fallback).trim();
+
+  /*
+   * SVG color values are intentionally restricted to
+   * common CSS color syntaxes. This prevents arbitrary
+   * SVG markup from being injected through project data.
+   */
+  if (
+    /^#[0-9a-fA-F]{3,8}$/.test(candidate) ||
+    /^rgb(a)?\([^)]*\)$/.test(candidate) ||
+    /^hsl(a)?\([^)]*\)$/.test(candidate) ||
+    /^[a-zA-Z]+$/.test(candidate)
+  ) {
+    return candidate;
   }
-  async writeFrame(state:any,options:SvgRenderOptions,dir:string,name:string){const p=join(dir,name);await mkdir(dirname(p),{recursive:true});await writeFile(p,this.render(state,options),"utf8");return p;}
+
+  return fallback;
+}
+
+function escapeXml(
+  value: unknown,
+): string {
+  return asString(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
+
+function point(
+  value: unknown,
+  fallback: Vec3,
+): Vec3 {
+  const v =
+    value &&
+    typeof value === "object"
+      ? value as Record<string, unknown>
+      : {};
+
+  return {
+    x: finiteNumber(v.x, fallback.x),
+    y: finiteNumber(v.y, fallback.y),
+    z: finiteNumber(v.z, fallback.z),
+  };
+}
+
+function scale(
+  value: unknown,
+): Vec3 {
+  const v =
+    value &&
+    typeof value === "object"
+      ? value as Record<string, unknown>
+      : {};
+
+  return {
+    x: positiveNumber(v.x, 1),
+    y: positiveNumber(v.y, 1),
+    z: positiveNumber(v.z, 1),
+  };
+}
+
+function rotation(
+  value: unknown,
+): Vec3 {
+  const v =
+    value &&
+    typeof value === "object"
+      ? value as Record<string, unknown>
+      : {};
+
+  return {
+    x: finiteNumber(v.x, 0),
+    y: finiteNumber(v.y, 0),
+    z: finiteNumber(v.z, 0),
+  };
+}
+
+function transformOf(
+  entity: RenderEntity,
+): {
+  position: Vec3;
+  rotation: Vec3;
+  scale: Vec3;
+} {
+  return {
+    position: point(
+      entity.transform?.position,
+      { x: 0, y: 0, z: 0 },
+    ),
+
+    rotation: rotation(
+      entity.transform?.rotation,
+    ),
+
+    scale: scale(
+      entity.transform?.scale,
+    ),
+  };
+}
+
+function componentsOf(
+  entity: RenderEntity,
+): Record<string, unknown> {
+  return entity.components ?? {};
+}
+
+/* -------------------------------------------------------------------------- */
+/* Camera                                                                     */
+/* -------------------------------------------------------------------------- */
+
+function cameraScale(
+  state: any,
+): number {
+  const zoom =
+    finiteNumber(
+      state?.camera?.zoom,
+      1,
+    );
+
+  return clamp(zoom, 0.01, 100);
+}
+
+function cameraOffset(
+  state: any,
+): Vec2 {
+  const camera =
+    state?.camera ?? {};
+
+  const position =
+    point(
+      camera.position,
+      { x: 0, y: 0, z: 10 },
+    );
+
+  return {
+    x: position.x,
+    y: position.y,
+  };
+}
+
+function worldToScreen(
+  position: Vec3,
+  state: any,
+  width: number,
+  height: number,
+): Vec2 {
+  const zoom = cameraScale(state);
+  const camera = cameraOffset(state);
+
+  return {
+    x:
+      width / 2 +
+      (position.x - camera.x) *
+        zoom,
+
+    y:
+      height / 2 +
+      (position.y - camera.y) *
+        zoom,
+  };
+}
+
+/* -------------------------------------------------------------------------- */
+/* Entity Ordering                                                            */
+/* -------------------------------------------------------------------------- */
+
+function renderOrder(
+  entity: RenderEntity,
+  index: number,
+): number {
+  const components =
+    componentsOf(entity);
+
+  const layer =
+    finiteNumber(
+      components.renderOrder,
+      finiteNumber(
+        components.layerOrder,
+        0,
+      ),
+    );
+
+  /*
+   * z is used as a deterministic secondary
+   * ordering value.
+   */
+  const z =
+    finiteNumber(
+      entity.transform?.position?.z,
+      0,
+    );
+
+  return layer * 1_000_000 + z * 1_000 + index;
+}
+
+/* -------------------------------------------------------------------------- */
+/* SVG Renderer                                                               */
+/* -------------------------------------------------------------------------- */
+
+export class SvgRenderer {
+  readonly version =
+    RENDERER_VERSION;
+
+  /* ------------------------------------------------------------------------ */
+  /* Validation                                                               */
+  /* ------------------------------------------------------------------------ */
+
+  validateOptions(
+    options: SvgRenderOptions,
+  ): SvgRenderOptions {
+    const width =
+      Math.floor(
+        positiveNumber(
+          options.width,
+          DEFAULT_WIDTH,
+        ),
+      );
+
+    const height =
+      Math.floor(
+        positiveNumber(
+          options.height,
+          DEFAULT_HEIGHT,
+        ),
+      );
+
+    if (
+      width <= 0 ||
+      height <= 0
+    ) {
+      throw new Error(
+        "SVG render width and height must be positive.",
+      );
+    }
+
+    if (
+      width > 16_384 ||
+      height > 16_384
+    ) {
+      throw new Error(
+        "SVG render dimensions must not exceed 16384 pixels.",
+      );
+    }
+
+    return {
+      width,
+      height,
+      transparent:
+        options.transparent ?? false,
+
+      backgroundColor:
+        color(
+          options.backgroundColor,
+          DEFAULT_BACKGROUND,
+        ),
+
+      includeMetadata:
+        options.includeMetadata ?? true,
+    };
+  }
+
+  /* ------------------------------------------------------------------------ */
+  /* Main Render                                                              */
+  /* ------------------------------------------------------------------------ */
+
+  render(
+    state: any,
+    options: SvgRenderOptions,
+  ): string {
+    const normalized =
+      this.validateOptions(
+        options,
+      );
+
+    const width =
+      normalized.width;
+
+    const height =
+      normalized.height;
+
+    const entities =
+      Array.isArray(state?.entities)
+        ? [...state.entities]
+        : [];
+
+    entities.sort(
+      (a: RenderEntity, b: RenderEntity) => {
+        const ai =
+          entities.indexOf(a);
+
+        const bi =
+          entities.indexOf(b);
+
+        return (
+          renderOrder(a, ai) -
+          renderOrder(b, bi)
+        );
+      },
+    );
+
+    const parts: string[] = [];
+
+    parts.push(
+      `<svg xmlns="http://www.w3.org/2000/svg" ` +
+      `width="${width}" ` +
+      `height="${height}" ` +
+      `viewBox="0 0 ${width} ${height}" ` +
+      `version="1.1">`,
+    );
+
+    if (
+      normalized.includeMetadata
+    ) {
+      parts.push(
+        `<metadata>` +
+        `Cartoon Animation Engine ` +
+        `2D SVG Renderer ${RENDERER_VERSION}` +
+        `</metadata>`,
+      );
+    }
+
+    if (
+      !normalized.transparent
+    ) {
+      const background =
+        color(
+          state?.background?.color,
+          normalized.backgroundColor ??
+            DEFAULT_BACKGROUND,
+        );
+
+      parts.push(
+        `<rect ` +
+        `x="0" y="0" ` +
+        `width="${width}" ` +
+        `height="${height}" ` +
+        `fill="${escapeXml(background)}"/>`,
+      );
+    }
+
+    /*
+     * A deterministic root group makes future
+     * renderer transformations easier.
+     */
+    parts.push(
+      `<g id="scene-root">`,
+    );
+
+    for (
+      const entity of entities
+    ) {
+      parts.push(
+        this.renderEntity(
+          entity,
+          state,
+          width,
+          height,
+        ),
+      );
+    }
+
+    parts.push("</g>");
+    parts.push("</svg>");
+
+    return parts.join("");
+  }
+
+  /* ------------------------------------------------------------------------ */
+  /* Structured Render                                                        */
+  /* ------------------------------------------------------------------------ */
+
+  renderResult(
+    state: any,
+    options: SvgRenderOptions,
+  ): Render2DResult {
+    const normalized =
+      this.validateOptions(
+        options,
+      );
+
+    return {
+      svg: this.render(
+        state,
+        normalized,
+      ),
+
+      width:
+        normalized.width,
+
+      height:
+        normalized.height,
+
+      renderer: "svg",
+
+      version:
+        RENDERER_VERSION,
+    };
+  }
+
+  /* ------------------------------------------------------------------------ */
+  /* Entity Renderer                                                          */
+  /* ------------------------------------------------------------------------ */
+
+  private renderEntity(
+    entity: RenderEntity,
+    state: any,
+    width: number,
+    height: number,
+  ): string {
+    const transform =
+      transformOf(entity);
+
+    const components =
+      componentsOf(entity);
+
+    const screen =
+  worldToScreen(
+    transform.position,
+    state,
+    width,
+    height,
+  );
+
+const sx =
+  transform.scale.x;
+
+const sy =
+  transform.scale.y;
+
+const rz =
+  transform.rotation.z;
+
+    const opacity =
+      clamp(
+        finiteNumber(
+          components.opacity,
+          1,
+        ),
+        0,
+        1,
+      );
+
+    const id =
+      escapeXml(
+        asString(
+          entity.id,
+          `entity-${Math.round(
+            screen.x,
+          )}-${Math.round(
+            screen.y,
+          )}`,
+        ),
+      );
+
+    const transformString =
+      `translate(${screen.x} ${screen.y}) ` +
+      `rotate(${rz}) ` +
+      `scale(${sx} ${sy})`;
+
+    const commonStart =
+      `<g id="${id}" ` +
+      `transform="${transformString}" ` +
+      `opacity="${opacity}">`;
+
+    const type =
+      asString(
+        entity.type,
+        "unknown",
+      ).toLowerCase();
+
+    let body = "";
+
+    switch (type) {
+      case "character":
+        body =
+          this.renderCharacter(
+            entity,
+          );
+        break;
+
+      case "prop":
+        body =
+          this.renderProp(
+            entity,
+          );
+        break;
+
+      case "text":
+        body =
+          this.renderText(
+            entity,
+          );
+        break;
+
+      case "sprite":
+        body =
+          this.renderSprite(
+            entity,
+          );
+        break;
+
+      case "shape":
+        body =
+          this.renderShape(
+            entity,
+          );
+        break;
+
+      case "scene":
+        body =
+          this.renderSceneEntity(
+            entity,
+            width,
+            height,
+          );
+        break;
+
+      default:
+        body =
+          this.renderFallback(
+            entity,
+          );
+        break;
+    }
+
+    return (
+      commonStart +
+      body +
+      "</g>"
+    );
+  }
+
+  /* ------------------------------------------------------------------------ */
+  /* Character                                                               */
+  /* ------------------------------------------------------------------------ */
+
+  private renderCharacter(
+    entity: RenderEntity,
+  ): string {
+    const components =
+      componentsOf(entity);
+
+    const evaluation =
+      entity.evaluation ?? {};
+
+    const facial =
+      evaluation.facial ?? {};
+
+    const skin =
+      color(
+        components.skin,
+        DEFAULT_SKIN,
+      );
+
+    const hair =
+      color(
+        components.hairColor ??
+          components.hair,
+        DEFAULT_HAIR,
+      );
+
+    const top =
+      color(
+        components.topColor ??
+          components.outfitColor,
+        DEFAULT_TOP,
+      );
+
+    const eyeColor =
+      color(
+        components.eyeColor,
+        "#222222",
+      );
+
+    const smile =
+      clamp(
+        finiteNumber(
+          facial.smile,
+          0,
+        ),
+        -1,
+        1,
+      );
+
+    const mouthOpen =
+      clamp(
+        finiteNumber(
+          facial.mouthOpen,
+          0,
+        ),
+        0,
+        1,
+      );
+
+    const browRaise =
+      finiteNumber(
+        facial.browRaise,
+        0,
+      );
+
+    const eyeSquint =
+      clamp(
+        finiteNumber(
+          facial.eyeSquint,
+          0,
+        ),
+        -1,
+        1,
+      );
+
+    const blink =
+      clamp(
+        finiteNumber(
+          facial.blink,
+          0,
+        ),
+        0,
+        1,
+      );
+
+    const eyeHeight =
+      Math.max(
+        1.5,
+        6 * (1 - blink),
+      );
+
+    const eyeY =
+      -25 -
+      browRaise * 5;
+
+    const mouthWidth =
+      18 +
+      Math.abs(smile) * 5;
+
+    const mouthHeight =
+      Math.max(
+        2,
+        4 +
+          mouthOpen * 14,
+      );
+
+    const squintScale =
+      clamp(
+        1 -
+          Math.max(
+            0,
+            eyeSquint,
+          ) *
+            0.55,
+        0.35,
+        1,
+      );
+
+    return [
+      `<ellipse ` +
+        `cx="0" cy="90" ` +
+        `rx="42" ry="12" ` +
+        `fill="#000000" ` +
+        `opacity="0.15"/>`,
+
+      `<rect ` +
+        `x="-30" y="20" ` +
+        `width="60" height="70" ` +
+        `rx="18" ` +
+        `fill="${escapeXml(top)}"/>`,
+
+      `<circle ` +
+        `cx="0" cy="-25" ` +
+        `r="48" ` +
+        `fill="${escapeXml(skin)}"/>`,
+
+      `<path ` +
+        `d="M-45-28 Q0-75 45-28 ` +
+        `L38-58 Q0-88-38-58Z" ` +
+        `fill="${escapeXml(hair)}"/>`,
+
+      `<ellipse ` +
+        `cx="-17" ` +
+        `cy="${eyeY}" ` +
+        `rx="6" ` +
+        `ry="${eyeHeight * squintScale}" ` +
+        `fill="${escapeXml(eyeColor)}"/>`,
+
+      `<ellipse ` +
+        `cx="17" ` +
+        `cy="${eyeY}" ` +
+        `rx="6" ` +
+        `ry="${eyeHeight * squintScale}" ` +
+        `fill="${escapeXml(eyeColor)}"/>`,
+
+      `<path ` +
+        `d="M-7-8 Q0-3 7-8" ` +
+        `fill="none" ` +
+        `stroke="#9B6B55" ` +
+        `stroke-width="2" ` +
+        `stroke-linecap="round"/>`,
+
+      `<ellipse ` +
+        `cx="0" cy="5" ` +
+        `rx="${mouthWidth}" ` +
+        `ry="${mouthHeight}" ` +
+        `fill="#5A2630"/>`,
+
+      `<path ` +
+        `d="M-${mouthWidth - 3} 5 ` +
+        `Q0 ${5 - smile * 9} ` +
+        `${mouthWidth - 3} 5"` +
+        ` fill="none"` +
+        ` stroke="#2F1118"` +
+        ` stroke-width="2"` +
+        ` stroke-linecap="round"/>`,
+    ].join("");
+  }
+
+  /* ------------------------------------------------------------------------ */
+  /* Prop                                                                     */
+  /* ------------------------------------------------------------------------ */
+
+  private renderProp(
+    entity: RenderEntity,
+  ): string {
+    const c =
+      componentsOf(entity);
+
+    const width =
+      positiveNumber(
+        c.width,
+        100,
+      );
+
+    const height =
+      positiveNumber(
+        c.height,
+        60,
+      );
+
+    const fill =
+      color(
+        c.color,
+        "#9B6B43",
+      );
+
+    const radius =
+      positiveNumber(
+        c.radius,
+        6,
+      );
+
+    const label =
+      escapeXml(
+        entity.name ??
+          c.label ??
+          "",
+      );
+
+    const showLabel =
+      label.length > 0;
+
+    return [
+      `<rect ` +
+        `x="${-width / 2}" ` +
+        `y="${-height / 2}" ` +
+        `width="${width}" ` +
+        `height="${height}" ` +
+        `rx="${radius}" ` +
+        `fill="${escapeXml(fill)}"/>`,
+
+      showLabel
+        ? `<text ` +
+          `x="0" y="5" ` +
+          `text-anchor="middle" ` +
+          `font-family="sans-serif" ` +
+          `font-size="16" ` +
+          `fill="#FFFFFF">` +
+          label +
+          `</text>`
+        : "",
+    ].join("");
+  }
+
+  /* ------------------------------------------------------------------------ */
+  /* Text                                                                     */
+  /* ------------------------------------------------------------------------ */
+
+  private renderText(
+    entity: RenderEntity,
+  ): string {
+    const c =
+      componentsOf(entity);
+
+    const text =
+      escapeXml(
+        c.text ??
+          entity.name ??
+          "",
+      );
+
+    const fontSize =
+      positiveNumber(
+        c.fontSize,
+        24,
+      );
+
+    const fill =
+      color(
+        c.color,
+        "#222222",
+      );
+
+    const anchor =
+      ["start", "middle", "end"].includes(
+        asString(c.anchor),
+      )
+        ? asString(c.anchor)
+        : "middle";
+
+    const weight =
+      asString(
+        c.fontWeight,
+        "normal",
+      );
+
+    return (
+      `<text ` +
+      `x="0" y="0" ` +
+      `text-anchor="${anchor}" ` +
+      `font-family="sans-serif" ` +
+      `font-size="${fontSize}" ` +
+      `font-weight="${escapeXml(weight)}" ` +
+      `fill="${escapeXml(fill)}">` +
+      text +
+      `</text>`
+    );
+  }
+
+  /* ------------------------------------------------------------------------ */
+  /* Sprite                                                                   */
+  /* ------------------------------------------------------------------------ */
+
+  private renderSprite(
+    entity: RenderEntity,
+  ): string {
+    const c =
+      componentsOf(entity);
+
+    const width =
+      positiveNumber(
+        c.width,
+        100,
+      );
+
+    const height =
+      positiveNumber(
+        c.height,
+        100,
+      );
+
+    const href =
+      asString(
+        c.href ??
+          c.src,
+      );
+
+    if (
+      href.length === 0
+    ) {
+      return this.renderPlaceholder(
+        width,
+        height,
+      );
+    }
+
+    /*
+     * Data URLs and remote URLs are intentionally
+     * not interpreted by the renderer. The SVG can
+     * only reference a controlled string supplied by
+     * the already validated asset pipeline.
+     */
+    return (
+      `<image ` +
+      `x="${-width / 2}" ` +
+      `y="${-height / 2}" ` +
+      `width="${width}" ` +
+      `height="${height}" ` +
+      `preserveAspectRatio="xMidYMid meet" ` +
+      `href="${escapeXml(href)}"/>`
+    );
+  }
+
+  /* ------------------------------------------------------------------------ */
+  /* Generic Shape                                                            */
+  /* ------------------------------------------------------------------------ */
+
+  private renderShape(
+    entity: RenderEntity,
+  ): string {
+    const c =
+      componentsOf(entity);
+
+    const shape =
+      asString(
+        c.shape,
+        "rectangle",
+      ).toLowerCase();
+
+    const fill =
+      color(
+        c.fill ??
+          c.color,
+        "#808080",
+      );
+
+    const stroke =
+      color(
+        c.stroke,
+        "none",
+      );
+
+    const strokeWidth =
+      positiveNumber(
+        c.strokeWidth,
+        1,
+      );
+
+    if (
+      shape === "circle"
+    ) {
+      const radius =
+        positiveNumber(
+          c.radius,
+          40,
+        );
+
+      return (
+        `<circle ` +
+        `cx="0" cy="0" ` +
+        `r="${radius}" ` +
+        `fill="${escapeXml(fill)}" ` +
+        `stroke="${escapeXml(stroke)}" ` +
+        `stroke-width="${strokeWidth}"/>`
+      );
+    }
+
+    if (
+      shape === "ellipse"
+    ) {
+      const rx =
+        positiveNumber(
+          c.rx,
+          50,
+        );
+
+      const ry =
+        positiveNumber(
+          c.ry,
+          30,
+        );
+
+      return (
+        `<ellipse ` +
+        `cx="0" cy="0" ` +
+        `rx="${rx}" ry="${ry}" ` +
+        `fill="${escapeXml(fill)}" ` +
+        `stroke="${escapeXml(stroke)}" ` +
+        `stroke-width="${strokeWidth}"/>`
+      );
+    }
+
+    const width =
+      positiveNumber(
+        c.width,
+        100,
+      );
+
+    const height =
+      positiveNumber(
+        c.height,
+        100,
+      );
+
+    const radius =
+      positiveNumber(
+        c.radius,
+        0,
+      );
+
+    return (
+      `<rect ` +
+      `x="${-width / 2}" ` +
+      `y="${-height / 2}" ` +
+      `width="${width}" ` +
+      `height="${height}" ` +
+      `rx="${radius}" ` +
+      `fill="${escapeXml(fill)}" ` +
+      `stroke="${escapeXml(stroke)}" ` +
+      `stroke-width="${strokeWidth}"/>`
+    );
+  }
+
+  /* ------------------------------------------------------------------------ */
+  /* Scene Entity                                                             */
+  /* ------------------------------------------------------------------------ */
+
+  private renderSceneEntity(
+    entity: RenderEntity,
+    width: number,
+    height: number,
+  ): string {
+    const c =
+      componentsOf(entity);
+
+    const fill =
+      color(
+        c.color ??
+          c.backgroundColor,
+        DEFAULT_BACKGROUND,
+      );
+
+    return (
+      `<rect ` +
+      `x="${-width / 2}" ` +
+      `y="${-height / 2}" ` +
+      `width="${width}" ` +
+      `height="${height}" ` +
+      `fill="${escapeXml(fill)}"/>`
+    );
+  }
+
+  /* ------------------------------------------------------------------------ */
+  /* Fallback                                                                 */
+  /* ------------------------------------------------------------------------ */
+
+  private renderFallback(
+    entity: RenderEntity,
+  ): string {
+    const c =
+      componentsOf(entity);
+
+    const width =
+      positiveNumber(
+        c.width,
+        80,
+      );
+
+    const height =
+      positiveNumber(
+        c.height,
+        80,
+      );
+
+    return this.renderPlaceholder(
+      width,
+      height,
+    );
+  }
+
+  private renderPlaceholder(
+    width: number,
+    height: number,
+  ): string {
+    return [
+      `<rect ` +
+        `x="${-width / 2}" ` +
+        `y="${-height / 2}" ` +
+        `width="${width}" ` +
+        `height="${height}" ` +
+        `fill="#CCCCCC" ` +
+        `stroke="#666666" ` +
+        `stroke-width="2"/>`,
+
+      `<line ` +
+        `x1="${-width / 2}" ` +
+        `y1="${-height / 2}" ` +
+        `x2="${width / 2}" ` +
+        `y2="${height / 2}" ` +
+        `stroke="#666666" ` +
+        `stroke-width="2"/>`,
+
+      `<line ` +
+        `x1="${width / 2}" ` +
+        `y1="${-height / 2}" ` +
+        `x2="${-width / 2}" ` +
+        `y2="${height / 2}" ` +
+        `stroke="#666666" ` +
+        `stroke-width="2"/>`,
+    ].join("");
+  }
+
+  /* ------------------------------------------------------------------------ */
+  /* File Output                                                              */
+  /* ------------------------------------------------------------------------ */
+
+  async writeFrame(
+    state: any,
+    options: SvgRenderOptions,
+    directory: string,
+    name: string,
+  ): Promise<string> {
+    if (
+      name.trim().length === 0
+    ) {
+      throw new Error(
+        "SVG frame filename must not be empty.",
+      );
+    }
+
+    /*
+     * Only a filename is accepted here.
+     * Directory traversal is rejected.
+     */
+    if (
+      name.includes("/") ||
+      name.includes("\\") ||
+      name.includes("..")
+    ) {
+      throw new Error(
+        "SVG frame name must be a simple filename.",
+      );
+    }
+
+    const svg =
+      this.render(
+        state,
+        options,
+      );
+
+    const path =
+      join(
+        directory,
+        name,
+      );
+
+    await mkdir(
+      dirname(path),
+      {
+        recursive: true,
+      },
+    );
+
+    await writeFile(
+      path,
+      svg,
+      "utf8",
+    );
+
+    return path;
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Factory                                                                     */
+/* -------------------------------------------------------------------------- */
+
+export function createSvgRenderer(): SvgRenderer {
+  return new SvgRenderer();
 }
