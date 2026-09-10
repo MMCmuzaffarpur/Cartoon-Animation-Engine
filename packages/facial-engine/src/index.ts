@@ -6,9 +6,15 @@ import {
   FacialControl as FacialControlSchema,
 } from "../../contracts/src/index.js";
 
-/* -------------------------------------------------------------------------- */
-/* Types                                                                      */
-/* -------------------------------------------------------------------------- */
+/* ==========================================================================
+ * VERSION
+ * ========================================================================== */
+
+export const FACIAL_ENGINE_VERSION = "2.0.0";
+
+/* ==========================================================================
+ * TYPES
+ * ========================================================================== */
 
 export type FacialValue = number;
 
@@ -49,9 +55,61 @@ export interface FacialValidationResult {
   errors: string[];
 }
 
-/* -------------------------------------------------------------------------- */
-/* Constants                                                                  */
-/* -------------------------------------------------------------------------- */
+export interface FacialLayer {
+  id: string;
+  name: string;
+  priority: number;
+  weight: number;
+  controls: Record<string, number>;
+  enabled: boolean;
+  additive: boolean;
+}
+
+export interface FacialEvaluationInput {
+  tick: number;
+  base?: Record<string, number>;
+  layers?: FacialLayer[];
+  expression?: string;
+  expressionWeight?: number;
+  emotion?: string;
+  emotionWeight?: number;
+  lipSync?: Record<string, number>;
+  gaze?: GazeState;
+  blink?: number;
+  manualOverride?: Record<string, number>;
+}
+
+export interface FacialEvaluationResult {
+  tick: number;
+  controls: Record<string, number>;
+  layers: FacialLayer[];
+  version: string;
+}
+
+export interface BlinkScheduleOptions {
+  intervalTicks?: number;
+  durationTicks?: number;
+  phaseOffsetTicks?: number;
+  intensity?: number;
+}
+
+export interface GazeTarget {
+  x: number;
+  y: number;
+  weight?: number;
+}
+
+export interface FacialConstraint {
+  min?: number;
+  max?: number;
+}
+
+export type FacialConstraintMap =
+  Record<string, FacialConstraint>;
+
+/* ==========================================================================
+ * CONSTANTS
+ * ========================================================================== */
 
 export const DEFAULT_FACIAL_CONTROLS = [
   "smile",
@@ -164,19 +222,51 @@ export const DEFAULT_EXPRESSIONS: Record<
   },
 };
 
-/* -------------------------------------------------------------------------- */
-/* Math                                                                       */
-/* -------------------------------------------------------------------------- */
+export const EMOTION_ALIASES: Record<string, string> = {
+  joy: "happy",
+  happiness: "happy",
+  laugh: "happy",
+  laughing: "happy",
+
+  rage: "angry",
+  mad: "angry",
+
+  sorrow: "sad",
+  sadness: "sad",
+
+  surprise: "surprised",
+  shock: "surprised",
+
+  fear: "fearful",
+  scared: "fearful",
+
+ disgust: "disgusted",
+
+  calm: "neutral",
+  normal: "neutral",
+};
+
+export const DEFAULT_CONSTRAINTS: FacialConstraintMap =
+  Object.fromEntries(
+    DEFAULT_FACIAL_CONTROLS.map((control) => [
+      control,
+      {
+        min: -1,
+        max: 1,
+      },
+    ]),
+  );
+
+/* ==========================================================================
+ * MATH
+ * ========================================================================== */
 
 function clamp(
   value: number,
   min: number,
   max: number,
 ): number {
-  return Math.min(
-    max,
-    Math.max(min, value),
-  );
+  return Math.min(max, Math.max(min, value));
 }
 
 function lerp(
@@ -187,25 +277,43 @@ function lerp(
   return a + (b - a) * t;
 }
 
-function smoothstep(
-  t: number,
-): number {
+function smoothstep(t: number): number {
   const x = clamp(t, 0, 1);
 
-  return (
-    x *
-    x *
-    (3 - 2 * x)
-  );
+  return x * x * (3 - 2 * x);
 }
 
-/* -------------------------------------------------------------------------- */
-/* Deterministic Identity                                                     */
-/* -------------------------------------------------------------------------- */
+/* ==========================================================================
+ * DETERMINISTIC HELPERS
+ * ========================================================================== */
 
-function deterministicUuid(
-  input: string,
-): string {
+function canonicalize(value: unknown): string {
+  if (
+    value === null ||
+    typeof value !== "object"
+  ) {
+    return JSON.stringify(value);
+  }
+
+  if (Array.isArray(value)) {
+    return `[${value.map(canonicalize).join(",")}]`;
+  }
+
+  const object =
+    value as Record<string, unknown>;
+
+  return `{${Object.keys(object)
+    .sort()
+    .map(
+      (key) =>
+        `${JSON.stringify(key)}:${canonicalize(
+          object[key],
+        )}`,
+    )
+    .join(",")}}`;
+}
+
+function deterministicUuid(input: string): string {
   const digest = createHash("sha256")
     .update(input)
     .digest("hex");
@@ -231,59 +339,33 @@ function deterministicUuid(
   );
 }
 
-function canonicalize(
-  value: unknown,
-): string {
-  if (
-    value === null ||
-    typeof value !== "object"
-  ) {
-    return JSON.stringify(value);
-  }
-
-  if (Array.isArray(value)) {
-    return `[${value
-      .map(canonicalize)
-      .join(",")}]`;
-  }
-
-  const object =
-    value as Record<string, unknown>;
-
-  return `{${Object.keys(object)
-    .sort()
-    .map(
-      (key) =>
-        `${JSON.stringify(key)}:${canonicalize(
-          object[key],
-        )}`,
-    )
-    .join(",")}}`;
-}
-
-/* -------------------------------------------------------------------------- */
-/* Normalization                                                              */
-/* -------------------------------------------------------------------------- */
+/* ==========================================================================
+ * CONTROL NORMALIZATION
+ * ========================================================================== */
 
 function normalizeControls(
   controls: Record<string, number>,
+  constraints: FacialConstraintMap = DEFAULT_CONSTRAINTS,
 ): Record<string, number> {
   const output: Record<string, number> = {};
 
-  for (const [
-    name,
-    value,
-  ] of Object.entries(controls)) {
+  for (const [name, value] of Object.entries(controls)) {
     if (!Number.isFinite(value)) {
       throw new Error(
         `Facial control "${name}" must be finite.`,
       );
     }
 
+    const constraint =
+      constraints[name] ?? {
+        min: -1,
+        max: 1,
+      };
+
     output[name] = clamp(
       value,
-      -1,
-      1,
+      constraint.min ?? -1,
+      constraint.max ?? 1,
     );
   }
 
@@ -296,15 +378,11 @@ function controlsToArray(
   return Object.entries(
     normalizeControls(controls),
   )
-    .sort(([a], [b]) =>
-      a.localeCompare(b),
-    )
-    .map(
-      ([name, value]) => ({
-        name,
-        value,
-      }),
-    );
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([name, value]) => ({
+      name,
+      value,
+    }));
 }
 
 function controlsFromArray(
@@ -335,14 +413,41 @@ function controlsFromArray(
   return output;
 }
 
-/* -------------------------------------------------------------------------- */
-/* Facial Engine                                                              */
-/* -------------------------------------------------------------------------- */
+/* ==========================================================================
+ * FACIAL ENGINE
+ * ========================================================================== */
 
 export class FacialEngine {
-  /* ------------------------------------------------------------------------ */
-  /* Expression                                                               */
-  /* ------------------------------------------------------------------------ */
+  readonly version =
+    FACIAL_ENGINE_VERSION;
+
+  /* ------------------------------------------------------------------------
+   * CONTROL DEFINITIONS
+   * ------------------------------------------------------------------------ */
+
+  getControlNames(): string[] {
+    return [
+      ...DEFAULT_FACIAL_CONTROLS,
+    ];
+  }
+
+  hasControl(name: string): boolean {
+    return (
+      DEFAULT_FACIAL_CONTROLS as readonly string[]
+    ).includes(name);
+  }
+
+  defaultPose(): Record<string, number> {
+    return Object.fromEntries(
+      DEFAULT_FACIAL_CONTROLS.map(
+        (control) => [control, 0],
+      ),
+    );
+  }
+
+  /* ------------------------------------------------------------------------
+   * EXPRESSION
+   * ------------------------------------------------------------------------ */
 
   expression(
     name: string,
@@ -363,29 +468,42 @@ export class FacialEngine {
       ] ??
       DEFAULT_EXPRESSIONS.neutral;
 
-    const normalizedWeight =
-      clamp(
-        weight,
-        0,
-        1,
-      );
-
     return normalizeControls(
       Object.fromEntries(
         Object.entries(base).map(
           ([key, value]) => [
             key,
-            value *
-              normalizedWeight,
+            value * clamp(weight, 0, 1),
           ],
         ),
       ),
     );
   }
 
-  /* ------------------------------------------------------------------------ */
-  /* Canonical Expression Creation                                           */
-  /* ------------------------------------------------------------------------ */
+  /* ------------------------------------------------------------------------
+   * EMOTION
+   * ------------------------------------------------------------------------ */
+
+  emotion(
+    name: string,
+    weight = 1,
+  ): Record<string, number> {
+    const normalized =
+      name.trim().toLowerCase();
+
+    const expressionName =
+      EMOTION_ALIASES[normalized] ??
+      normalized;
+
+    return this.expression(
+      expressionName,
+      weight,
+    );
+  }
+
+  /* ------------------------------------------------------------------------
+   * EXPRESSION CREATION
+   * ------------------------------------------------------------------------ */
 
   createExpression(
     name: string,
@@ -402,15 +520,12 @@ export class FacialEngine {
     }
 
     const normalizedControls =
-      normalizeControls(
-        controls,
-      );
+      normalizeControls(controls);
 
     const identity =
       canonicalize({
         name: normalizedName,
-        controls:
-          normalizedControls,
+        controls: normalizedControls,
         deterministicKey:
           deterministicKey ?? null,
       });
@@ -431,10 +546,6 @@ export class FacialEngine {
     );
   }
 
-  /* ------------------------------------------------------------------------ */
-  /* Built-in Expression                                                      */
-  /* ------------------------------------------------------------------------ */
-
   createBuiltInExpression(
     name: string,
     weight = 1,
@@ -448,9 +559,9 @@ export class FacialEngine {
     );
   }
 
-  /* ------------------------------------------------------------------------ */
-  /* Expression Validation                                                    */
-  /* ------------------------------------------------------------------------ */
+  /* ------------------------------------------------------------------------
+   * EXPRESSION VALIDATION
+   * ------------------------------------------------------------------------ */
 
   validateExpression(
     expression: Expression,
@@ -495,7 +606,8 @@ export class FacialEngine {
       };
     }
 
-    const names = new Set<string>();
+    const names =
+      new Set<string>();
 
     for (const control of expression.controls) {
       if (names.has(control.name)) {
@@ -523,15 +635,14 @@ export class FacialEngine {
     }
 
     return {
-      valid:
-        errors.length === 0,
+      valid: errors.length === 0,
       errors,
     };
   }
 
-  /* ------------------------------------------------------------------------ */
-  /* Blend                                                                     */
-  /* ------------------------------------------------------------------------ */
+  /* ------------------------------------------------------------------------
+   * BLENDING
+   * ------------------------------------------------------------------------ */
 
   blend(
     ...controls: Record<string, number>[]
@@ -544,10 +655,9 @@ export class FacialEngine {
           controlSet,
         );
 
-      for (const [
-        name,
-        value,
-      ] of Object.entries(normalized)) {
+      for (const [name, value] of Object.entries(
+        normalized,
+      )) {
         output[name] =
           (output[name] ?? 0) +
           value;
@@ -558,10 +668,6 @@ export class FacialEngine {
       output,
     );
   }
-
-  /* ------------------------------------------------------------------------ */
-  /* Weighted Blend                                                           */
-  /* ------------------------------------------------------------------------ */
 
   blendWeighted(
     layers: Array<{
@@ -590,14 +696,12 @@ export class FacialEngine {
           layer.controls,
         );
 
-      for (const [
-        name,
-        value,
-      ] of Object.entries(normalized)) {
+      for (const [name, value] of Object.entries(
+        normalized,
+      )) {
         output[name] =
           (output[name] ?? 0) +
-          value *
-            weight;
+          value * weight;
       }
     }
 
@@ -606,9 +710,9 @@ export class FacialEngine {
     );
   }
 
-  /* ------------------------------------------------------------------------ */
-  /* Interpolation                                                             */
-  /* ------------------------------------------------------------------------ */
+  /* ------------------------------------------------------------------------
+   * INTERPOLATION
+   * ------------------------------------------------------------------------ */
 
   interpolate(
     from: Record<string, number>,
@@ -621,25 +725,28 @@ export class FacialEngine {
       );
     }
 
-    const t = clamp(
-      amount,
-      0,
-      1,
-    );
+    const t =
+      clamp(
+        amount,
+        0,
+        1,
+      );
 
-    const names = new Set([
-      ...Object.keys(from),
-      ...Object.keys(to),
-    ]);
+    const names =
+      new Set([
+        ...Object.keys(from),
+        ...Object.keys(to),
+      ]);
 
     const output: Record<string, number> = {};
 
     for (const name of names) {
-      output[name] = lerp(
-        from[name] ?? 0,
-        to[name] ?? 0,
-        t,
-      );
+      output[name] =
+        lerp(
+          from[name] ?? 0,
+          to[name] ?? 0,
+          t,
+        );
     }
 
     return normalizeControls(
@@ -647,33 +754,27 @@ export class FacialEngine {
     );
   }
 
-  /* ------------------------------------------------------------------------ */
-  /* Smooth Interpolation                                                     */
-  /* ------------------------------------------------------------------------ */
-
   smoothInterpolate(
     from: Record<string, number>,
     to: Record<string, number>,
     amount: number,
   ): Record<string, number> {
-    const t = smoothstep(
-      clamp(
-        amount,
-        0,
-        1,
-      ),
-    );
-
     return this.interpolate(
       from,
       to,
-      t,
+      smoothstep(
+        clamp(
+          amount,
+          0,
+          1,
+        ),
+      ),
     );
   }
 
-  /* ------------------------------------------------------------------------ */
-  /* Gaze                                                                      */
-  /* ------------------------------------------------------------------------ */
+  /* ------------------------------------------------------------------------
+   * GAZE
+   * ------------------------------------------------------------------------ */
 
   gaze(
     x: number,
@@ -702,13 +803,47 @@ export class FacialEngine {
     };
   }
 
-  /* ------------------------------------------------------------------------ */
-  /* Blink                                                                     */
-  /* ------------------------------------------------------------------------ */
+  gazeToTarget(
+    current: GazeState,
+    target: GazeTarget,
+    amount = 1,
+  ): GazeState &
+    Record<string, number> {
+    const weight =
+      clamp(
+        target.weight ?? amount,
+        0,
+        1,
+      );
+
+    const x =
+      lerp(
+        current.x,
+        clamp(target.x, -1, 1),
+        weight,
+      );
+
+    const y =
+      lerp(
+        current.y,
+        clamp(target.y, -1, 1),
+        weight,
+      );
+
+    return this.gaze(
+      x,
+      y,
+    );
+  }
+
+  /* ------------------------------------------------------------------------
+   * BLINK
+   * ------------------------------------------------------------------------ */
 
   blink(
     opening: number,
-  ): BlinkState & Record<string, number> {
+  ): BlinkState &
+    Record<string, number> {
     if (!Number.isFinite(opening)) {
       throw new Error(
         "Blink opening must be finite.",
@@ -727,9 +862,80 @@ export class FacialEngine {
     };
   }
 
-  /* ------------------------------------------------------------------------ */
-  /* Viseme                                                                    */
-  /* ------------------------------------------------------------------------ */
+  blinkAt(
+    tick: number,
+    options: BlinkScheduleOptions = {},
+  ): number {
+    if (!Number.isInteger(tick)) {
+      throw new Error(
+        "Blink tick must be an integer.",
+      );
+    }
+
+    const interval =
+      Math.max(
+        1,
+        Math.floor(
+          options.intervalTicks ??
+            90_000,
+        ),
+      );
+
+    const duration =
+      Math.max(
+        1,
+        Math.floor(
+          options.durationTicks ??
+            4_000,
+        ),
+      );
+
+    const phase =
+      Math.floor(
+        options.phaseOffsetTicks ??
+          0,
+      );
+
+    const intensity =
+      clamp(
+        options.intensity ?? 1,
+        0,
+        1,
+      );
+
+    const local =
+      ((tick - phase) % interval +
+        interval) %
+      interval;
+
+    if (local >= duration) {
+      return 0;
+    }
+
+    const progress =
+      local /
+      duration;
+
+    /*
+     * Close → open.
+     * A smooth bell curve gives a natural
+     * blink instead of a hard switch.
+     */
+    const value =
+      Math.sin(
+        progress * Math.PI,
+      );
+
+    return clamp(
+      value * intensity,
+      0,
+      1,
+    );
+  }
+
+  /* ------------------------------------------------------------------------
+   * VISEME
+   * ------------------------------------------------------------------------ */
 
   viseme(
     name: string,
@@ -760,9 +966,9 @@ export class FacialEngine {
     };
   }
 
-  /* ------------------------------------------------------------------------ */
-  /* Track                                                                     */
-  /* ------------------------------------------------------------------------ */
+  /* ------------------------------------------------------------------------
+   * FACIAL TRACK
+   * ------------------------------------------------------------------------ */
 
   track(
     name: string,
@@ -800,6 +1006,11 @@ export class FacialEngine {
       );
     }
 
+    const normalizedControls =
+      normalizeControls(
+        controls,
+      );
+
     return {
       id: deterministicUuid(
         `facial-track:${canonicalize({
@@ -807,24 +1018,16 @@ export class FacialEngine {
           startTick,
           endTick,
           controls:
-            normalizeControls(
-              controls,
-            ),
+            normalizedControls,
         })}`,
       ),
       name: normalizedName,
       startTick,
       endTick,
       controls:
-        normalizeControls(
-          controls,
-        ),
+        normalizedControls,
     };
   }
-
-  /* ------------------------------------------------------------------------ */
-  /* Evaluate Track                                                            */
-  /* ------------------------------------------------------------------------ */
 
   evaluateTrack(
     track: FacialTrack,
@@ -836,17 +1039,13 @@ export class FacialEngine {
       );
     }
 
-    if (
-      tick <= track.startTick
-    ) {
+    if (tick <= track.startTick) {
       return structuredClone(
         track.controls,
       );
     }
 
-    if (
-      tick >= track.endTick
-    ) {
+    if (tick >= track.endTick) {
       return {};
     }
 
@@ -855,13 +1054,13 @@ export class FacialEngine {
       track.startTick;
 
     const amount =
-      (
-        tick -
-        track.startTick
-      ) / duration;
+      (tick - track.startTick) /
+      duration;
 
     const t =
-      smoothstep(amount);
+      smoothstep(
+        amount,
+      );
 
     return normalizeControls(
       Object.fromEntries(
@@ -881,9 +1080,414 @@ export class FacialEngine {
     );
   }
 
-  /* ------------------------------------------------------------------------ */
-  /* Convert Canonical Expression                                             */
-  /* ------------------------------------------------------------------------ */
+  /* ------------------------------------------------------------------------
+   * LAYER
+   * ------------------------------------------------------------------------ */
+
+  createLayer(
+    name: string,
+    controls: Record<string, number>,
+    options: {
+      priority?: number;
+      weight?: number;
+      additive?: boolean;
+      enabled?: boolean;
+      id?: string;
+    } = {},
+  ): FacialLayer {
+    const normalizedName =
+      name.trim();
+
+    if (!normalizedName) {
+      throw new Error(
+        "Facial layer name must not be empty.",
+      );
+    }
+
+    const normalizedControls =
+      normalizeControls(
+        controls,
+      );
+
+    const identity =
+      canonicalize({
+        name: normalizedName,
+        priority:
+          options.priority ?? 0,
+        weight:
+          options.weight ?? 1,
+        additive:
+          options.additive ?? false,
+        controls:
+          normalizedControls,
+        id:
+          options.id ?? null,
+      });
+
+    return {
+      id:
+        options.id ??
+        deterministicUuid(
+          `facial-layer:${identity}`,
+        ),
+      name: normalizedName,
+      priority:
+        Math.floor(
+          options.priority ?? 0,
+        ),
+      weight:
+        clamp(
+          options.weight ?? 1,
+          0,
+          1,
+        ),
+      controls:
+        normalizedControls,
+      enabled:
+        options.enabled ?? true,
+      additive:
+        options.additive ?? false,
+    };
+  }
+
+  /* ------------------------------------------------------------------------
+   * PRIORITY EVALUATION
+   * ------------------------------------------------------------------------ */
+
+  evaluateLayers(
+    base: Record<string, number>,
+    layers: FacialLayer[],
+  ): Record<string, number> {
+    const output =
+      normalizeControls(
+        base,
+      );
+
+    const sorted =
+      layers
+        .filter(
+          (layer) =>
+            layer.enabled &&
+            layer.weight > 0,
+        )
+        .sort(
+          (a, b) =>
+            a.priority -
+            b.priority ||
+            a.id.localeCompare(
+              b.id,
+            ),
+        );
+
+    for (const layer of sorted) {
+      const weight =
+        clamp(
+          layer.weight,
+          0,
+          1,
+        );
+
+      const controls =
+        normalizeControls(
+          layer.controls,
+        );
+
+      for (const [name, value] of Object.entries(
+        controls,
+      )) {
+        const current =
+          output[name] ?? 0;
+
+        if (layer.additive) {
+          output[name] =
+            current +
+            value * weight;
+        } else {
+          output[name] =
+            lerp(
+              current,
+              value,
+              weight,
+            );
+        }
+      }
+    }
+
+    return normalizeControls(
+      output,
+    );
+  }
+
+  /* ------------------------------------------------------------------------
+ * MANUAL OVERRIDE
+ * ------------------------------------------------------------------------ */
+
+applyManualOverride(
+  controls: Record<string, number>,
+  override: Record<string, number>,
+  weight = 1,
+): Record<string, number> {
+  if (!Number.isFinite(weight)) {
+    throw new Error(
+      "Manual override weight must be finite.",
+    );
+  }
+
+  const amount = clamp(
+    weight,
+    0,
+    1,
+  );
+
+  const base =
+    normalizeControls(
+      controls,
+    );
+
+  const normalizedOverride =
+    normalizeControls(
+      override,
+    );
+
+  const names =
+    new Set<string>([
+      ...Object.keys(base),
+      ...Object.keys(
+        normalizedOverride,
+      ),
+    ]);
+
+  const result: Record<
+    string,
+    number
+  > = {};
+
+  for (const name of names) {
+    result[name] =
+      lerp(
+        base[name] ?? 0,
+        normalizedOverride[name] ?? 0,
+        amount,
+      );
+  }
+
+  return normalizeControls(
+    result,
+  );
+}
+ /* ------------------------------------------------------------------------
+ * SAFE MANUAL OVERRIDE
+ * ------------------------------------------------------------------------ */
+
+blendManualOverride(
+  base: Record<string, number>,
+  override: Record<string, number>,
+  weight = 1,
+): Record<string, number> {
+  if (!Number.isFinite(weight)) {
+    throw new Error(
+      "Manual override weight must be finite.",
+    );
+  }
+
+  const amount =
+    clamp(
+      weight,
+      0,
+      1,
+    );
+
+  const names =
+    new Set<string>([
+      ...Object.keys(base),
+      ...Object.keys(override),
+    ]);
+
+  const result: Record<
+    string,
+    number
+  > = {};
+
+  for (const name of names) {
+    result[name] =
+      lerp(
+        base[name] ?? 0,
+        override[name] ?? 0,
+        amount,
+      );
+  }
+
+  return normalizeControls(
+    result,
+  );
+}
+
+  /* ------------------------------------------------------------------------
+   * LIP-SYNC MAPPING
+   * ------------------------------------------------------------------------ */
+
+  applyLipSync(
+    base: Record<string, number>,
+    lipSync: Record<string, number>,
+    weight = 1,
+  ): Record<string, number> {
+    return this.blendManualOverride(
+      base,
+      lipSync,
+      weight,
+    );
+  }
+
+  /* ------------------------------------------------------------------------
+   * COMPLETE FACIAL EVALUATION
+   * ------------------------------------------------------------------------ */
+
+  evaluate(
+    input: FacialEvaluationInput,
+  ): FacialEvaluationResult {
+    if (!Number.isInteger(input.tick)) {
+      throw new Error(
+        "Facial evaluation tick must be an integer.",
+      );
+    }
+
+    let result =
+      this.defaultPose();
+
+    /*
+     * Base pose
+     */
+    if (input.base) {
+      result =
+        this.blendManualOverride(
+          result,
+          input.base,
+          1,
+        );
+    }
+
+    /*
+     * Expression
+     */
+    if (input.expression) {
+      result =
+        this.blendManualOverride(
+          result,
+          this.expression(
+            input.expression,
+            input.expressionWeight ?? 1,
+          ),
+          1,
+        );
+    }
+
+    /*
+     * Emotion
+     */
+    if (input.emotion) {
+      result =
+        this.blendManualOverride(
+          result,
+          this.emotion(
+            input.emotion,
+            input.emotionWeight ?? 1,
+          ),
+          1,
+        );
+    }
+
+    /*
+     * Layers
+     *
+     * This is where priority-based
+     * facial animation is resolved.
+     */
+    const layers =
+      input.layers ?? [];
+
+    result =
+      this.evaluateLayers(
+        result,
+        layers,
+      );
+
+    /*
+     * Gaze
+     */
+    if (input.gaze) {
+      result =
+        this.blendManualOverride(
+          result,
+          this.gaze(
+            input.gaze.x,
+            input.gaze.y,
+          ),
+          1,
+        );
+    }
+
+    /*
+     * Lip-sync
+     *
+     * Lip-sync is intentionally applied
+     * after expression/emotion so dialogue
+     * mouth movement remains visible.
+     */
+    if (input.lipSync) {
+      result =
+        this.applyLipSync(
+          result,
+          input.lipSync,
+          1,
+        );
+    }
+
+    /*
+     * Blink
+     */
+    if (input.blink !== undefined) {
+      result =
+        this.blendManualOverride(
+          result,
+          this.blink(
+            input.blink,
+          ),
+          1,
+        );
+    }
+
+    /*
+     * Manual animator override
+     *
+     * Highest ordinary animation priority.
+     */
+    if (input.manualOverride) {
+      result =
+        this.blendManualOverride(
+          result,
+          input.manualOverride,
+          1,
+        );
+    }
+
+    return {
+      tick: input.tick,
+      controls:
+        normalizeControls(
+          result,
+        ),
+      layers:
+        structuredClone(
+          layers,
+        ),
+      version:
+        FACIAL_ENGINE_VERSION,
+    };
+  }
+
+  /* ------------------------------------------------------------------------
+   * EXPRESSION CONVERSION
+   * ------------------------------------------------------------------------ */
 
   expressionToControls(
     expression: Expression,
@@ -903,9 +1507,9 @@ export class FacialEngine {
     );
   }
 
-  /* ------------------------------------------------------------------------ */
-  /* Default Pose                                                              */
-  /* ------------------------------------------------------------------------ */
+  /* ------------------------------------------------------------------------
+   * NEUTRAL
+   * ------------------------------------------------------------------------ */
 
   neutral(): Record<string, number> {
     return this.expression(
@@ -914,9 +1518,45 @@ export class FacialEngine {
     );
   }
 
-  /* ------------------------------------------------------------------------ */
-  /* Fingerprint                                                               */
-  /* ------------------------------------------------------------------------ */
+  /* ------------------------------------------------------------------------
+   * CONSTRAINTS
+   * ------------------------------------------------------------------------ */
+
+  applyConstraints(
+    controls: Record<string, number>,
+    constraints: FacialConstraintMap,
+  ): Record<string, number> {
+    const output: Record<string, number> = {};
+
+    for (const [name, value] of Object.entries(
+      controls,
+    )) {
+      if (!Number.isFinite(value)) {
+        throw new Error(
+          `Facial control "${name}" must be finite.`,
+        );
+      }
+
+      const constraint =
+        constraints[name] ?? {
+          min: -1,
+          max: 1,
+        };
+
+      output[name] =
+        clamp(
+          value,
+          constraint.min ?? -1,
+          constraint.max ?? 1,
+        );
+    }
+
+    return output;
+  }
+
+  /* ------------------------------------------------------------------------
+   * FINGERPRINT
+   * ------------------------------------------------------------------------ */
 
   fingerprint(
     expression: Expression,
@@ -935,9 +1575,72 @@ export class FacialEngine {
       .digest("hex");
   }
 
-  /* ------------------------------------------------------------------------ */
-  /* Schema Helper                                                             */
-  /* ------------------------------------------------------------------------ */
+  fingerprintControls(
+    controls: Record<string, number>,
+  ): string {
+    return createHash("sha256")
+      .update(
+        canonicalize(
+          normalizeControls(
+            controls,
+          ),
+        ),
+      )
+      .digest("hex");
+  }
+
+  /* ------------------------------------------------------------------------
+   * DETERMINISM
+   * ------------------------------------------------------------------------ */
+
+  isDeterministic(
+    expression: Expression,
+  ): boolean {
+    const first =
+      this.fingerprint(
+        expression,
+      );
+
+    const second =
+      this.fingerprint(
+        structuredClone(
+          expression,
+        ),
+      );
+
+    return first === second;
+  }
+
+  isEvaluationDeterministic(
+    input: FacialEvaluationInput,
+  ): boolean {
+    const first =
+      this.evaluate(
+        structuredClone(
+          input,
+        ),
+      );
+
+    const second =
+      this.evaluate(
+        structuredClone(
+          input,
+        ),
+      );
+
+    return (
+      canonicalize(
+        first,
+      ) ===
+      canonicalize(
+        second,
+      )
+    );
+  }
+
+  /* ------------------------------------------------------------------------
+   * CONTROL VALIDATION
+   * ------------------------------------------------------------------------ */
 
   validateControl(
     control: FacialControl,
@@ -962,4 +1665,55 @@ export class FacialEngine {
       control,
     );
   }
+
+  validateControls(
+    controls: Record<string, number>,
+  ): FacialValidationResult {
+    const errors: string[] = [];
+
+    for (const [name, value] of Object.entries(
+      controls,
+    )) {
+      if (!name.trim()) {
+        errors.push(
+          "Facial control name must not be empty.",
+        );
+      }
+
+      if (!Number.isFinite(value)) {
+        errors.push(
+          `Facial control "${name}" must be finite.`,
+        );
+      }
+
+      if (
+        value < -1 ||
+        value > 1
+      ) {
+        errors.push(
+          `Facial control "${name}" must be between -1 and 1.`,
+        );
+      }
+    }
+
+    return {
+      valid:
+        errors.length === 0,
+      errors,
+    };
+  }
 }
+
+/* ==========================================================================
+ * CANONICAL TYPES
+ * ========================================================================== */
+
+export type CanonicalExpression =
+  z.infer<
+    typeof ExpressionSchema
+  >;
+
+export type CanonicalFacialControl =
+  z.infer<
+    typeof FacialControlSchema
+  >;
