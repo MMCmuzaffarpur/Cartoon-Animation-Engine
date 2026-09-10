@@ -143,6 +143,12 @@ function smoothstep(
   );
 }
 
+/**
+ * Canonical deterministic serializer.
+ *
+ * Object keys are sorted so equivalent objects always
+ * produce identical serialized representations.
+ */
 function canonicalize(
   value: unknown,
 ): string {
@@ -173,6 +179,12 @@ function canonicalize(
     .join(",")}}`;
 }
 
+/**
+ * Generates a deterministic UUID-like identifier.
+ *
+ * The identifier is derived from SHA-256 and therefore
+ * remains stable for identical canonical input.
+ */
 function deterministicUuid(
   input: string,
 ): string {
@@ -204,7 +216,7 @@ function deterministicUuid(
 }
 
 /* -------------------------------------------------------------------------- */
-/* Keyframe Helpers                                                            */
+/* Keyframe Helpers                                                           */
 /* -------------------------------------------------------------------------- */
 
 function normalizeKeyframes(
@@ -231,7 +243,10 @@ function validateKeyframes(
   const errors: string[] = [];
 
   if (
-    track.targetPath.trim().length === 0
+    typeof track.targetPath !==
+      "string" ||
+    track.targetPath.trim().length ===
+      0
   ) {
     errors.push(
       "Track targetPath must not be empty.",
@@ -239,6 +254,9 @@ function validateKeyframes(
   }
 
   if (
+    !Array.isArray(
+      track.keyframes,
+    ) ||
     track.keyframes.length === 0
   ) {
     errors.push(
@@ -298,7 +316,7 @@ function validateKeyframes(
 }
 
 /* -------------------------------------------------------------------------- */
-/* Track Sampling                                                              */
+/* Track Sampling                                                             */
 /* -------------------------------------------------------------------------- */
 
 export function sampleTrack(
@@ -401,7 +419,7 @@ export function sampleTrack(
 }
 
 /* -------------------------------------------------------------------------- */
-/* Loop Evaluation                                                             */
+/* Loop Evaluation                                                            */
 /* -------------------------------------------------------------------------- */
 
 export function resolveLocalTick(
@@ -459,7 +477,7 @@ export function resolveLocalTick(
 }
 
 /* -------------------------------------------------------------------------- */
-/* Animation Engine                                                            */
+/* Animation Engine                                                           */
 /* -------------------------------------------------------------------------- */
 
 export class AnimationEngine {
@@ -481,6 +499,7 @@ export class AnimationEngine {
     } = {},
   ): MotionClip {
     if (
+      typeof name !== "string" ||
       name.trim().length === 0
     ) {
       throw new Error(
@@ -496,6 +515,14 @@ export class AnimationEngine {
     ) {
       throw new Error(
         "Motion clip durationTicks must be a positive integer.",
+      );
+    }
+
+    if (
+      !Array.isArray(tracks)
+    ) {
+      throw new Error(
+        "Motion clip tracks must be an array.",
       );
     }
 
@@ -549,26 +576,34 @@ export class AnimationEngine {
 
     const clip: MotionClip = {
       id,
-      name,
+      name:
+        name.trim(),
+
       durationTicks,
+
       loopMode:
         options.loopMode ??
         "once",
+
       tracks:
         normalizedTracks,
+
       events:
         structuredClone(
           options.events ??
             [],
         ),
+
       rootMotion:
         structuredClone(
           options.rootMotion ??
             {},
         ),
+
       semanticCategory:
         options.semanticCategory ??
         "custom",
+
       rigRequirements:
         [
           ...(options.rigRequirements ??
@@ -692,8 +727,10 @@ export class AnimationEngine {
       }
 
       if (
+        typeof event.type !==
+          "string" ||
         event.type.trim().length ===
-        0
+          0
       ) {
         errors.push(
           "Motion event type must not be empty.",
@@ -732,7 +769,10 @@ export class AnimationEngine {
     }
 
     if (
-      layer.id.trim().length === 0
+      typeof layer.id !==
+        "string" ||
+      layer.id.trim().length ===
+        0
     ) {
       throw new Error(
         "Motion layer id must not be empty.",
@@ -746,6 +786,15 @@ export class AnimationEngine {
     ) {
       throw new Error(
         "Motion layer weight must be finite.",
+      );
+    }
+
+    if (
+      layer.weight < 0 ||
+      layer.weight > 1
+    ) {
+      throw new Error(
+        "Motion layer weight must be between 0 and 1.",
       );
     }
 
@@ -820,8 +869,6 @@ export class AnimationEngine {
   /**
    * Legacy two-argument API.
    *
-   * Example:
-   *
    * evaluate(
    *   [
    *     {
@@ -846,8 +893,6 @@ export class AnimationEngine {
 
   /**
    * Canonical three-argument API.
-   *
-   * Example:
    *
    * evaluate(
    *   [clip],
@@ -991,13 +1036,6 @@ export class AnimationEngine {
     for (
       const layer of sortedLayers
     ) {
-      /*
-       * Legacy layers have already been converted
-       * into canonical MotionLayer objects above.
-       *
-       * Canonical layers are validated against
-       * the contract.
-       */
       const validatedLayer =
         legacyMode
           ? structuredClone(
@@ -1095,7 +1133,7 @@ export class AnimationEngine {
       );
 
     /* ---------------------------------------------------------------------- */
-    /* Return Legacy Result                                                   */
+    /* Legacy Result                                                          */
     /* ---------------------------------------------------------------------- */
 
     if (legacyMode) {
@@ -1103,7 +1141,7 @@ export class AnimationEngine {
     }
 
     /* ---------------------------------------------------------------------- */
-    /* Return Canonical Result                                                */
+    /* Canonical Result                                                       */
     /* ---------------------------------------------------------------------- */
 
     return {
@@ -1113,7 +1151,7 @@ export class AnimationEngine {
   }
 
   /* ------------------------------------------------------------------------ */
-  /* Single Clip Evaluation                                                   */
+  /* Single Clip Evaluation                                                  */
   /* ------------------------------------------------------------------------ */
 
   evaluateClip(
@@ -1479,7 +1517,7 @@ export class AnimationEngine {
 }
 
 /* -------------------------------------------------------------------------- */
-/* Public Contract Helpers                                                    */
+/* Public Contract Helpers                                                   */
 /* -------------------------------------------------------------------------- */
 
 export type CanonicalKeyframe =
