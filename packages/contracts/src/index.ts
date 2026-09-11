@@ -81,11 +81,334 @@ export const Scene = z.object({
   renderLayers:z.array(z.object({id:z.string(),order:z.number().int(),name:z.string()})).default([]),
   settings:z.record(z.unknown()).default({})
 });
-export const Camera = z.object({
-  id:Uuid,name:z.string(),type:z.enum(["orthographic","perspective"]).default("orthographic"),
-  position:Vec3, target:Vec3, zoom:z.number().positive().default(1), fov:z.number().positive().default(45)
+/* -------------------------------------------------------------------------- */
+/* Camera Contract                                                            */
+/* -------------------------------------------------------------------------- */
+
+export const CameraType = z.enum([
+  "orthographic",
+  "perspective",
+]);
+
+export const CameraInterpolation = z.enum([
+  "step",
+  "linear",
+  "smooth",
+]);
+
+export const CameraProjection = z.enum([
+  "2d",
+  "3d",
+  "hybrid",
+]);
+
+export const CameraConstraint = z.object({
+  id: z.string().min(1),
+  type: z.enum([
+    "position-limit",
+    "target-limit",
+    "zoom-limit",
+    "fov-limit",
+    "scene-bounds",
+    "target-lock",
+    "follow",
+    "dead-zone",
+  ]),
+  enabled: z.boolean().default(true),
+  parameters: z.record(z.unknown()).default({}),
 });
-export const Shot = z.object({id:Uuid,sceneId:Uuid,cameraId:Uuid,startTick:z.number().int().nonnegative(),endTick:z.number().int().positive(),cameraTracks:z.array(z.record(z.unknown())).default([])});
+
+/* -------------------------------------------------------------------------- */
+/* Camera Composition                                                         */
+/* -------------------------------------------------------------------------- */
+
+export const CameraComposition = z.object({
+  mode: z.enum([
+    "free",
+    "center",
+    "rule-of-thirds",
+    "headroom",
+    "look-room",
+    "custom",
+  ]).default("free"),
+
+  subjectId: Uuid.nullable().default(null),
+
+  anchorX: z.number().min(0).max(1).default(0.5),
+  anchorY: z.number().min(0).max(1).default(0.5),
+
+  headroom: z.number().min(0).max(1).default(0.15),
+  lookRoom: z.number().min(0).max(1).default(0.15),
+
+  safeArea: z.object({
+    left: z.number().min(0).max(0.5).default(0.05),
+    right: z.number().min(0).max(0.5).default(0.05),
+    top: z.number().min(0).max(0.5).default(0.05),
+    bottom: z.number().min(0).max(0.5).default(0.05),
+  }).default({}),
+});
+
+/* -------------------------------------------------------------------------- */
+/* Camera Follow                                                              */
+/* -------------------------------------------------------------------------- */
+
+export const CameraFollow = z.object({
+  enabled: z.boolean().default(false),
+
+  targetEntityId: Uuid.nullable().default(null),
+
+  offset: Vec3.default({
+    x: 0,
+    y: 0,
+    z: 0,
+  }),
+
+  weight: z.number().min(0).max(1).default(1),
+
+  damping: z.number().min(0).default(0),
+
+  preserveZ: z.boolean().default(true),
+
+  deadZone: z.object({
+    x: z.number().min(0).default(0),
+    y: z.number().min(0).default(0),
+    z: z.number().min(0).default(0),
+  }).default({}),
+});
+
+/* -------------------------------------------------------------------------- */
+/* Camera Shake                                                               */
+/* -------------------------------------------------------------------------- */
+
+export const CameraShake = z.object({
+  enabled: z.boolean().default(false),
+
+  amplitude: z.number().min(0).default(0),
+
+  frequency: z.number().min(0).default(1),
+
+  seed: z.number().int().nonnegative().default(0),
+
+  position: z.object({
+    x: z.number().default(1),
+    y: z.number().default(1),
+    z: z.number().default(1),
+  }).default({}),
+
+  rotation: z.object({
+    x: z.number().default(0),
+    y: z.number().default(0),
+    z: z.number().default(0),
+  }).default({}),
+});
+
+/* -------------------------------------------------------------------------- */
+/* Camera Keyframe                                                            */
+/* -------------------------------------------------------------------------- */
+
+export const CameraKeyframe = z.object({
+  tick: z.number().int().nonnegative(),
+
+  position: Vec3.optional(),
+
+  target: Vec3.optional(),
+
+  zoom: z.number().positive().optional(),
+
+  fov: z.number().positive().max(179).optional(),
+
+  interpolation:
+    CameraInterpolation.default("smooth"),
+
+  tension: z.number().min(-1).max(1).default(0),
+
+  continuity: z.enum([
+    "continuous",
+    "broken",
+  ]).default("continuous"),
+});
+
+/* -------------------------------------------------------------------------- */
+/* Camera Track                                                               */
+/* -------------------------------------------------------------------------- */
+
+export const CameraTrack = z.object({
+  id: Uuid,
+
+  name: z.string().min(1),
+
+  keyframes: z.array(
+    CameraKeyframe,
+  ).min(1),
+
+  enabled: z.boolean().default(true),
+
+  weight: z.number().min(0).max(1).default(1),
+
+  additive: z.boolean().default(false),
+});
+
+/* -------------------------------------------------------------------------- */
+/* Camera Preset                                                              */
+/* -------------------------------------------------------------------------- */
+
+export const CameraPreset = z.object({
+  id: z.string().min(1),
+
+  name: z.string().min(1),
+
+  shotType: z.enum([
+    "extreme-close-up",
+    "close-up",
+    "medium-close-up",
+    "medium",
+    "medium-wide",
+    "wide",
+    "extreme-wide",
+    "over-shoulder",
+    "two-shot",
+    "establishing",
+    "custom",
+  ]),
+
+  parameters: z.record(z.unknown()).default({}),
+});
+
+/* -------------------------------------------------------------------------- */
+/* Camera Contract                                                            */
+/* -------------------------------------------------------------------------- */
+
+export const Camera = z.object({
+  id: Uuid,
+
+  name: z.string().min(1),
+
+  type: CameraType.default("orthographic"),
+
+  projection:
+    CameraProjection.default("2d"),
+
+  /* ----------------------------- Transform ------------------------------ */
+
+  position: Vec3,
+
+  target: Vec3,
+
+  up: Vec3.default({
+    x: 0,
+    y: 1,
+    z: 0,
+  }),
+
+  /* ------------------------------ Lens ---------------------------------- */
+
+  zoom: z.number().positive().default(1),
+
+  fov: z.number()
+    .positive()
+    .max(179)
+    .default(45),
+
+  nearClip: z.number()
+    .positive()
+    .default(0.01),
+
+  farClip: z.number()
+    .positive()
+    .default(10000),
+
+  orthographicSize: z.number()
+    .positive()
+    .default(1),
+
+  aspectRatio: z.object({
+    numerator: z.number().int().positive(),
+    denominator: z.number().int().positive(),
+  }).default({
+    numerator: 16,
+    denominator: 9,
+  }),
+
+  /* --------------------------- Composition ------------------------------ */
+
+  composition:
+    CameraComposition.default({}),
+
+  /* ------------------------------ Follow -------------------------------- */
+
+  follow:
+    CameraFollow.default({}),
+
+  /* ------------------------------- Shake -------------------------------- */
+
+  shake:
+    CameraShake.default({}),
+
+  /* ---------------------------- Animation ------------------------------- */
+
+  tracks:
+    z.array(CameraTrack).default([]),
+
+  /* ---------------------------- Constraints ------------------------------ */
+
+  constraints:
+    z.array(CameraConstraint).default([]),
+
+  /* ------------------------------ Metadata ------------------------------- */
+
+  preset:
+    z.string().nullable().default(null),
+
+  metadata:
+    z.record(z.unknown()).default({}),
+});
+export const Shot = z.object({
+  id: Uuid,
+
+  sceneId: Uuid,
+
+  cameraId: Uuid,
+
+  startTick:
+    z.number().int().nonnegative(),
+
+  endTick:
+    z.number().int().positive(),
+
+  cameraTracks:
+    z.array(CameraTrack).default([]),
+
+  transitionIn:
+    z.enum([
+      "cut",
+      "dissolve",
+      "fade",
+      "push",
+      "zoom",
+      "match",
+      "none",
+    ]).default("cut"),
+
+  transitionOut:
+    z.enum([
+      "cut",
+      "dissolve",
+      "fade",
+      "push",
+      "zoom",
+      "match",
+      "none",
+    ]).default("cut"),
+
+  transitionDurationTicks:
+    z.number().int().nonnegative().default(0),
+
+  composition:
+    CameraComposition.default({}),
+
+  metadata:
+    z.record(z.unknown()).default({}),
+});
 export const Sequence = z.object({id:Uuid,name:z.string(),startTick:z.number().int().nonnegative(),endTick:z.number().int().positive(),shots:z.array(Shot),audioTracks:z.array(z.record(z.unknown())).default([]),captionTracks:z.array(z.record(z.unknown())).default([])});
 export const Timeline = z.object({tracks:z.array(z.record(z.unknown())).default([]),durationTicks:z.number().int().nonnegative()});
 export const AudioTrack = z.object({id:Uuid,name:z.string(),assetId:Uuid.nullable(),startTick:z.number().int().nonnegative(),endTick:z.number().int().nonnegative(),volume:z.number().min(0).max(2).default(1),pan:z.number().min(-1).max(1).default(0),fadeInTicks:z.number().int().nonnegative().default(0),fadeOutTicks:z.number().int().nonnegative().default(0)});
@@ -134,4 +457,4 @@ export type CanonicalCommandT = z.infer<typeof CanonicalCommand>;
 export type CommandPlanT = z.infer<typeof CommandPlan>;
 export type SceneT = z.infer<typeof Scene>;
 export type CharacterAssemblyT = z.infer<typeof CharacterAssembly>;
-export const schemaCatalog = ["ProjectManifest","ProjectRevision","AssetManifest","CharacterDefinition","CharacterAssembly","CharacterVariant","RigDefinition","MotionClip","MotionLayer","Expression","LipSyncTrack","Scene","Camera","Shot","Sequence","Timeline","AudioTrack","RenderRequest","RenderManifest","Job","CapabilityDescriptor","PromptIntent","CanonicalCommand","CommandPlan","PlanPreview"] as const;
+export const schemaCatalog = ["ProjectManifest","ProjectRevision","AssetManifest","CharacterDefinition","CharacterAssembly","CharacterVariant","RigDefinition","MotionClip","MotionLayer","Expression","LipSyncTrack","Scene","Camera","CameraConstraint","CameraComposition","CameraFollow","CameraShake","CameraKeyframe","CameraTrack","CameraPreset","Shot","Sequence","Timeline","AudioTrack","RenderRequest","RenderManifest","Job","CapabilityDescriptor","PromptIntent","CanonicalCommand","CommandPlan","PlanPreview"] as const;
