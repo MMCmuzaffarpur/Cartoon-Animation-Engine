@@ -203,18 +203,30 @@ function normalizeCamera(
       ? source.zoom
       : 1;
 
+  /*
+   * Do not blindly spread invalid fov values
+   * into the canonical evaluated camera.
+   */
+  const {
+    fov: _sourceFov,
+    ...additionalCameraProperties
+  } = clone(source);
+
   const result: EvaluatedCamera =
     {
-      ...clone(source),
+      ...additionalCameraProperties,
       position,
       target,
       zoom,
     };
 
   if (
-    isFiniteNumber(source.fov)
+    isFiniteNumber(source.fov) &&
+    source.fov > 0 &&
+    source.fov < 180
   ) {
-    result.fov = source.fov;
+    result.fov =
+      source.fov;
   }
 
   return result;
@@ -285,16 +297,60 @@ function resolveMotionEvaluation(
       (layer: any) =>
         layer &&
         layer.clip &&
-        typeof layer.clip === "object",
+        typeof layer.clip ===
+          "object",
     );
 
   if (
-    embeddedLayers.length === motion.length
+    embeddedLayers.length ===
+    motion.length
   ) {
-    return animationEngine.evaluate(
-      embeddedLayers as any,
-      tick,
-    ) as Record<string, number>;
+    const result =
+      animationEngine.evaluate(
+        embeddedLayers as any,
+        tick,
+      ) as any;
+
+    /*
+     * AnimationEngine may return either:
+     *
+     * { values: {...} }
+     *
+     * or directly:
+     *
+     * {...}
+     *
+     * Normalize both forms at the
+     * FrameEvaluator boundary.
+     */
+    const values =
+      result &&
+      typeof result ===
+        "object" &&
+      !Array.isArray(result) &&
+      result.values &&
+      typeof result.values ===
+        "object"
+        ? result.values
+        : result;
+
+    if (
+      !values ||
+      typeof values !==
+        "object" ||
+      Array.isArray(values)
+    ) {
+      throw new Error(
+        "Animation evaluation returned an invalid motion value object.",
+      );
+    }
+
+    return clone(
+      values as Record<
+        string,
+        number
+      >,
+    );
   }
 
   /*
@@ -312,11 +368,6 @@ function resolveMotionEvaluation(
   if (
     clips.length === 0
   ) {
-    /*
-     * A malformed/incomplete animation
-     * reference must not silently produce
-     * a fake animation state.
-     */
     throw new Error(
       `Entity ${normalizeEntityId(
         entity,
@@ -325,15 +376,42 @@ function resolveMotionEvaluation(
     );
   }
 
-  return (
+  const result =
     animationEngine.evaluate(
       clips as any,
       motion as any,
       tick,
-    ) as any
-  ).values;
-}
+    ) as any;
 
+  const values =
+    result &&
+    typeof result ===
+      "object" &&
+    !Array.isArray(result) &&
+    result.values &&
+    typeof result.values ===
+      "object"
+      ? result.values
+      : result;
+
+  if (
+    !values ||
+    typeof values !==
+      "object" ||
+    Array.isArray(values)
+  ) {
+    throw new Error(
+      "Animation evaluation returned an invalid motion value object.",
+    );
+  }
+
+  return clone(
+    values as Record<
+      string,
+      number
+    >,
+  );
+}
 /* -------------------------------------------------------------------------- */
 /* Facial Evaluation                                                          */
 /* -------------------------------------------------------------------------- */

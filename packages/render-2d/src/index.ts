@@ -21,11 +21,6 @@ export interface Render2DResult {
   version: "1.0.0";
 }
 
-interface Vec2 {
-  x: number;
-  y: number;
-}
-
 interface Vec3 {
   x: number;
   y: number;
@@ -52,6 +47,7 @@ interface RenderEntity {
       weight?: number;
     } | null;
   };
+  [key: string]: unknown;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -68,7 +64,7 @@ const DEFAULT_SKIN = "#F1C7A8";
 const DEFAULT_HAIR = "#24170F";
 const DEFAULT_TOP = "#3A6EA5";
 
-const EPSILON = 0.000001;
+const MAX_DIMENSION = 16_384;
 
 /* -------------------------------------------------------------------------- */
 /* Safe Helpers                                                               */
@@ -89,7 +85,6 @@ function positiveNumber(
   fallback: number,
 ): number {
   const n = finiteNumber(value, fallback);
-
   return n > 0 ? n : fallback;
 }
 
@@ -114,17 +109,18 @@ function color(
   value: unknown,
   fallback: string,
 ): string {
-  const candidate = asString(value, fallback).trim();
+  const candidate =
+    asString(value, fallback).trim();
 
   /*
-   * SVG color values are intentionally restricted to
-   * common CSS color syntaxes. This prevents arbitrary
-   * SVG markup from being injected through project data.
+   * SVG color values are restricted to common CSS
+   * color syntaxes so project data cannot inject
+   * arbitrary SVG markup.
    */
   if (
     /^#[0-9a-fA-F]{3,8}$/.test(candidate) ||
-    /^rgb(a)?\([^)]*\)$/.test(candidate) ||
-    /^hsl(a)?\([^)]*\)$/.test(candidate) ||
+    /^rgba?\([^)]*\)$/.test(candidate) ||
+    /^hsla?\([^)]*\)$/.test(candidate) ||
     /^[a-zA-Z]+$/.test(candidate)
   ) {
     return candidate;
@@ -205,11 +201,9 @@ function transformOf(
       entity.transform?.position,
       { x: 0, y: 0, z: 0 },
     ),
-
     rotation: rotation(
       entity.transform?.rotation,
     ),
-
     scale: scale(
       entity.transform?.scale,
     ),
@@ -235,12 +229,19 @@ function cameraScale(
       1,
     );
 
-  return clamp(zoom, 0.01, 100);
+  return clamp(
+    zoom,
+    0.01,
+    100,
+  );
 }
 
 function cameraOffset(
   state: any,
-): Vec2 {
+): {
+  x: number;
+  y: number;
+} {
   const camera =
     state?.camera ?? {};
 
@@ -261,9 +262,15 @@ function worldToScreen(
   state: any,
   width: number,
   height: number,
-): Vec2 {
-  const zoom = cameraScale(state);
-  const camera = cameraOffset(state);
+): {
+  x: number;
+  y: number;
+} {
+  const zoom =
+    cameraScale(state);
+
+  const camera =
+    cameraOffset(state);
 
   return {
     x:
@@ -284,7 +291,7 @@ function worldToScreen(
 
 function renderOrder(
   entity: RenderEntity,
-  index: number,
+  originalIndex: number,
 ): number {
   const components =
     componentsOf(entity);
@@ -298,17 +305,24 @@ function renderOrder(
       ),
     );
 
-  /*
-   * z is used as a deterministic secondary
-   * ordering value.
-   */
   const z =
     finiteNumber(
       entity.transform?.position?.z,
       0,
     );
 
-  return layer * 1_000_000 + z * 1_000 + index;
+  /*
+   * The original index is the final deterministic
+   * tie-breaker. The caller passes the original
+   * position instead of using Array#indexOf(), which
+   * is incorrect when the same object reference occurs
+   * more than once.
+   */
+  return (
+    layer * 1_000_000 +
+    z * 1_000 +
+    originalIndex
+  );
 }
 
 /* -------------------------------------------------------------------------- */
@@ -326,6 +340,15 @@ export class SvgRenderer {
   validateOptions(
     options: SvgRenderOptions,
   ): SvgRenderOptions {
+    if (
+      !options ||
+      typeof options !== "object"
+    ) {
+      throw new Error(
+        "SVG render options are required.",
+      );
+    }
+
     const width =
       Math.floor(
         positiveNumber(
@@ -352,8 +375,8 @@ export class SvgRenderer {
     }
 
     if (
-      width > 16_384 ||
-      height > 16_384
+      width > MAX_DIMENSION ||
+      height > MAX_DIMENSION
     ) {
       throw new Error(
         "SVG render dimensions must not exceed 16384 pixels.",
@@ -363,8 +386,10 @@ export class SvgRenderer {
     return {
       width,
       height,
+
       transparent:
-        options.transparent ?? false,
+        options.transparent ??
+        false,
 
       backgroundColor:
         color(
@@ -373,7 +398,8 @@ export class SvgRenderer {
         ),
 
       includeMetadata:
-        options.includeMetadata ?? true,
+        options.includeMetadata ??
+        true,
     };
   }
 
@@ -385,6 +411,17 @@ export class SvgRenderer {
     state: any,
     options: SvgRenderOptions,
   ): string {
+    if (
+      state === null ||
+      state === undefined ||
+      typeof state !== "object" ||
+      Array.isArray(state)
+    ) {
+      throw new Error(
+        "SVG render state must be an object.",
+      );
+    }
+
     const normalized =
       this.validateOptions(
         options,
@@ -396,25 +433,63 @@ export class SvgRenderer {
     const height =
       normalized.height;
 
-    const entities =
-      Array.isArray(state?.entities)
-        ? [...state.entities]
+    const sourceEntities =
+      Array.isArray(state.entities)
+        ? state.entities
         : [];
 
-    entities.sort(
-      (a: RenderEntity, b: RenderEntity) => {
-        const ai =
-          entities.indexOf(a);
+    /*
+     * Decorate/sort/undecorate rather than calling
+     * indexOf() inside the comparator. This guarantees
+     * stable deterministic ordering even for duplicate
+     * object references.
+     */
+    interface IndexedRenderEntity {
+      entity: RenderEntity;
+      index: number;
+    }
 
-        const bi =
-          entities.indexOf(b);
+    const indexedEntities: IndexedRenderEntity[] =
+      sourceEntities.map(
+        (
+          entity: unknown,
+          index: number,
+        ): IndexedRenderEntity => ({
+          entity:
+            entity &&
+            typeof entity === "object"
+              ? entity as RenderEntity
+              : {
+                  id:
+                    `entity-${index}`,
+                },
 
-        return (
-          renderOrder(a, ai) -
-          renderOrder(b, bi)
-        );
-      },
+          index,
+        }),
+      );
+
+    indexedEntities.sort(
+      (
+        a: IndexedRenderEntity,
+        b: IndexedRenderEntity,
+      ) =>
+        renderOrder(
+          a.entity,
+          a.index,
+        ) -
+        renderOrder(
+          b.entity,
+          b.index,
+        ),
     );
+
+    const entities: RenderEntity[] =
+      indexedEntities.map(
+        (
+          item: IndexedRenderEntity,
+        ): RenderEntity =>
+          item.entity,
+      );
 
     const parts: string[] = [];
 
@@ -456,10 +531,6 @@ export class SvgRenderer {
       );
     }
 
-    /*
-     * A deterministic root group makes future
-     * renderer transformations easier.
-     */
     parts.push(
       `<g id="scene-root">`,
     );
@@ -497,10 +568,11 @@ export class SvgRenderer {
       );
 
     return {
-      svg: this.render(
-        state,
-        normalized,
-      ),
+      svg:
+        this.render(
+          state,
+          normalized,
+        ),
 
       width:
         normalized.width,
@@ -508,7 +580,8 @@ export class SvgRenderer {
       height:
         normalized.height,
 
-      renderer: "svg",
+      renderer:
+        "svg",
 
       version:
         RENDERER_VERSION,
@@ -532,21 +605,21 @@ export class SvgRenderer {
       componentsOf(entity);
 
     const screen =
-  worldToScreen(
-    transform.position,
-    state,
-    width,
-    height,
-  );
+      worldToScreen(
+        transform.position,
+        state,
+        width,
+        height,
+      );
 
-const sx =
-  transform.scale.x;
+    const sx =
+      transform.scale.x;
 
-const sy =
-  transform.scale.y;
+    const sy =
+      transform.scale.y;
 
-const rz =
-  transform.rotation.z;
+    const rz =
+      transform.rotation.z;
 
     const opacity =
       clamp(
@@ -562,11 +635,7 @@ const rz =
       escapeXml(
         asString(
           entity.id,
-          `entity-${Math.round(
-            screen.x,
-          )}-${Math.round(
-            screen.y,
-          )}`,
+          `entity-${Math.round(screen.x)}-${Math.round(screen.y)}`,
         ),
       );
 
@@ -649,7 +718,7 @@ const rz =
   }
 
   /* ------------------------------------------------------------------------ */
-  /* Character                                                               */
+  /* Character                                                                */
   /* ------------------------------------------------------------------------ */
 
   private renderCharacter(
@@ -736,10 +805,33 @@ const rz =
         1,
       );
 
+    const squintScale =
+      clamp(
+        1 -
+          Math.max(
+            0,
+            eyeSquint,
+          ) *
+            0.55,
+        0.35,
+        1,
+      );
+
+    /*
+     * Apply squint before the final minimum-height clamp.
+     * This guarantees that a fully blinked eye cannot
+     * become smaller than the canonical 1.5px closed-eye
+     * threshold.
+     */
+    /*
+     * squintScale is already included in eyeHeight.
+     * Do not multiply it again during SVG emission,
+     * otherwise blink + squint would be applied twice.
+     */
     const eyeHeight =
       Math.max(
         1.5,
-        6 * (1 - blink),
+        6 * (1 - blink) * squintScale,
       );
 
     const eyeY =
@@ -755,18 +847,6 @@ const rz =
         2,
         4 +
           mouthOpen * 14,
-      );
-
-    const squintScale =
-      clamp(
-        1 -
-          Math.max(
-            0,
-            eyeSquint,
-          ) *
-            0.55,
-        0.35,
-        1,
       );
 
     return [
@@ -796,14 +876,14 @@ const rz =
         `cx="-17" ` +
         `cy="${eyeY}" ` +
         `rx="6" ` +
-        `ry="${eyeHeight * squintScale}" ` +
+        `ry="${eyeHeight}" ` +
         `fill="${escapeXml(eyeColor)}"/>`,
 
       `<ellipse ` +
         `cx="17" ` +
         `cy="${eyeY}" ` +
         `rx="6" ` +
-        `ry="${eyeHeight * squintScale}" ` +
+        `ry="${eyeHeight}" ` +
         `fill="${escapeXml(eyeColor)}"/>`,
 
       `<path ` +
@@ -820,13 +900,13 @@ const rz =
         `fill="#5A2630"/>`,
 
       `<path ` +
-        `d="M-${mouthWidth - 3} 5 ` +
+        `d="M${-(mouthWidth - 3)} 5 ` +
         `Q0 ${5 - smile * 9} ` +
-        `${mouthWidth - 3} 5"` +
-        ` fill="none"` +
-        ` stroke="#2F1118"` +
-        ` stroke-width="2"` +
-        ` stroke-linecap="round"/>`,
+        `${mouthWidth - 3} 5" ` +
+        `fill="none" ` +
+        `stroke="#2F1118" ` +
+        `stroke-width="2" ` +
+        `stroke-linecap="round"/>`,
     ].join("");
   }
 
@@ -925,11 +1005,16 @@ const rz =
         "#222222",
       );
 
+    const anchorValue =
+      asString(
+        c.anchor,
+      );
+
     const anchor =
       ["start", "middle", "end"].includes(
-        asString(c.anchor),
+        anchorValue,
       )
-        ? asString(c.anchor)
+        ? anchorValue
         : "middle";
 
     const weight =
@@ -977,7 +1062,7 @@ const rz =
       asString(
         c.href ??
           c.src,
-      );
+      ).trim();
 
     if (
       href.length === 0
@@ -989,11 +1074,23 @@ const rz =
     }
 
     /*
-     * Data URLs and remote URLs are intentionally
-     * not interpreted by the renderer. The SVG can
-     * only reference a controlled string supplied by
-     * the already validated asset pipeline.
+     * The renderer only serializes an already validated
+     * asset reference. It does not execute, fetch, or
+     * interpret the URL.
+     *
+     * Restricting the scheme here prevents project data
+     * from introducing javascript: or other executable
+     * SVG references.
      */
+    if (
+      !isSafeImageReference(href)
+    ) {
+      return this.renderPlaceholder(
+        width,
+        height,
+      );
+    }
+
     return (
       `<image ` +
       `x="${-width / 2}" ` +
@@ -1077,7 +1174,8 @@ const rz =
       return (
         `<ellipse ` +
         `cx="0" cy="0" ` +
-        `rx="${rx}" ry="${ry}" ` +
+        `rx="${rx}" ` +
+        `ry="${ry}" ` +
         `fill="${escapeXml(fill)}" ` +
         `stroke="${escapeXml(stroke)}" ` +
         `stroke-width="${strokeWidth}"/>`
@@ -1097,9 +1195,12 @@ const rz =
       );
 
     const radius =
-      positiveNumber(
-        c.radius,
+      Math.max(
         0,
+        finiteNumber(
+          c.radius,
+          0,
+        ),
       );
 
     return (
@@ -1215,6 +1316,16 @@ const rz =
     name: string,
   ): Promise<string> {
     if (
+      typeof directory !== "string" ||
+      directory.trim().length === 0
+    ) {
+      throw new Error(
+        "SVG frame output directory must not be empty.",
+      );
+    }
+
+    if (
+      typeof name !== "string" ||
       name.trim().length === 0
     ) {
       throw new Error(
@@ -1223,10 +1334,13 @@ const rz =
     }
 
     /*
-     * Only a filename is accepted here.
-     * Directory traversal is rejected.
+     * Only a simple filename is accepted. This prevents
+     * traversal outside the caller-provided directory.
      */
     if (
+      name !== name.trim() ||
+      name === "." ||
+      name === ".." ||
       name.includes("/") ||
       name.includes("\\") ||
       name.includes("..")
@@ -1266,7 +1380,51 @@ const rz =
 }
 
 /* -------------------------------------------------------------------------- */
-/* Factory                                                                     */
+/* Asset Reference Safety                                                     */
+/* -------------------------------------------------------------------------- */
+
+function isSafeImageReference(
+  value: string,
+): boolean {
+  const lower =
+    value.trim().toLowerCase();
+
+  if (
+    lower.startsWith("javascript:") ||
+    lower.startsWith("vbscript:") ||
+    lower.startsWith("file:")
+  ) {
+    return false;
+  }
+
+  if (
+    lower.startsWith("data:")
+  ) {
+    return /^data:image\/(?:png|jpe?g|gif|webp|svg\+xml);/i.test(
+      value,
+    );
+  }
+
+  if (
+    lower.startsWith("https://") ||
+    lower.startsWith("http://")
+  ) {
+    return true;
+  }
+
+  /*
+   * Relative/local asset references are allowed.
+   * The asset pipeline remains responsible for resolving
+   * and validating their actual filesystem location.
+   */
+  return (
+    !lower.includes("://") &&
+    !lower.startsWith("//")
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* Factory                                                                    */
 /* -------------------------------------------------------------------------- */
 
 export function createSvgRenderer(): SvgRenderer {
