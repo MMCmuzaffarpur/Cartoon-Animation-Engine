@@ -458,7 +458,16 @@ export class JobEngine {
       );
     }
 
-    return job;
+    /*
+     * IMPORTANT:
+     *
+     * Never expose the internal JobRecord.
+     *
+     * All external callers receive a defensive
+     * deep clone so they cannot mutate the
+     * engine's internal state directly.
+     */
+    return clone(job);
   }
 
   /* ------------------------------------------------------------------------ */
@@ -484,7 +493,22 @@ export class JobEngine {
     message?: string,
   ): JobRecord {
     const job =
-      this.get(id);
+      this.jobs.get(
+        validateNonEmptyString(
+          id,
+          "Job id",
+        ),
+      );
+
+    if (
+      !job
+    ) {
+      throw new CaeError(
+        "JOB_NOT_FOUND",
+        "Job not found",
+        [id],
+      );
+    }
 
     if (
       progress !== undefined
@@ -569,7 +593,22 @@ export class JobEngine {
     progress: number,
   ): JobRecord {
     const job =
-      this.get(id);
+      this.jobs.get(
+        validateNonEmptyString(
+          id,
+          "Job id",
+        ),
+      );
+
+    if (
+      !job
+    ) {
+      throw new CaeError(
+        "JOB_NOT_FOUND",
+        "Job not found",
+        [id],
+      );
+    }
 
     const normalized =
       validateProgress(
@@ -622,7 +661,22 @@ export class JobEngine {
     message: string,
   ): JobRecord {
     const job =
-      this.get(id);
+      this.jobs.get(
+        validateNonEmptyString(
+          id,
+          "Job id",
+        ),
+      );
+
+    if (
+      !job
+    ) {
+      throw new CaeError(
+        "JOB_NOT_FOUND",
+        "Job not found",
+        [id],
+      );
+    }
 
     job.logs.push(
       normalizeLog(
@@ -655,7 +709,22 @@ export class JobEngine {
     checkpoint: JobCheckpoint,
   ): JobRecord {
     const job =
-      this.get(id);
+      this.jobs.get(
+        validateNonEmptyString(
+          id,
+          "Job id",
+        ),
+      );
+
+    if (
+      !job
+    ) {
+      throw new CaeError(
+        "JOB_NOT_FOUND",
+        "Job not found",
+        [id],
+      );
+    }
 
     if (
       !checkpoint ||
@@ -686,7 +755,22 @@ export class JobEngine {
     error: string,
   ): JobRecord {
     const job =
-      this.get(id);
+      this.jobs.get(
+        validateNonEmptyString(
+          id,
+          "Job id",
+        ),
+      );
+
+    if (
+      !job
+    ) {
+      throw new CaeError(
+        "JOB_NOT_FOUND",
+        "Job not found",
+        [id],
+      );
+    }
 
     const message =
       normalizeLog(
@@ -742,15 +826,33 @@ export class JobEngine {
   cancel(
     id: string,
   ): JobRecord {
+    const normalizedId =
+      validateNonEmptyString(
+        id,
+        "Job id",
+      );
+
     const job =
-      this.get(id);
+      this.jobs.get(
+        normalizedId,
+      );
+
+    if (
+      !job
+    ) {
+      throw new CaeError(
+        "JOB_NOT_FOUND",
+        "Job not found",
+        [normalizedId],
+      );
+    }
 
     if (
       job.state ===
         "queued"
     ) {
       return this.transition(
-        id,
+        normalizedId,
         "cancelled",
         job.progress,
         "Job cancelled before execution.",
@@ -764,7 +866,7 @@ export class JobEngine {
         "running"
     ) {
       return this.transition(
-        id,
+        normalizedId,
         "cancelling",
         job.progress,
         "Cancellation requested.",
@@ -791,8 +893,26 @@ export class JobEngine {
   completeCancellation(
     id: string,
   ): JobRecord {
+    const normalizedId =
+      validateNonEmptyString(
+        id,
+        "Job id",
+      );
+
     const job =
-      this.get(id);
+      this.jobs.get(
+        normalizedId,
+      );
+
+    if (
+      !job
+    ) {
+      throw new CaeError(
+        "JOB_NOT_FOUND",
+        "Job not found",
+        [normalizedId],
+      );
+    }
 
     if (
       job.state !==
@@ -805,7 +925,7 @@ export class JobEngine {
     }
 
     return this.transition(
-      id,
+      normalizedId,
       "cancelled",
       job.progress,
       "Job cancellation completed.",
@@ -819,8 +939,26 @@ export class JobEngine {
   retry(
     id: string,
   ): JobRecord {
+    const normalizedId =
+      validateNonEmptyString(
+        id,
+        "Job id",
+      );
+
     const job =
-      this.get(id);
+      this.jobs.get(
+        normalizedId,
+      );
+
+    if (
+      !job
+    ) {
+      throw new CaeError(
+        "JOB_NOT_FOUND",
+        "Job not found",
+        [normalizedId],
+      );
+    }
 
     if (
       job.state !==
@@ -834,7 +972,7 @@ export class JobEngine {
 
     const retrying =
       this.transition(
-        id,
+        normalizedId,
         "retrying",
         0,
         "Job retry requested.",
@@ -995,8 +1133,26 @@ export class JobEngine {
   remove(
     id: string,
   ): void {
+    const normalizedId =
+      validateNonEmptyString(
+        id,
+        "Job id",
+      );
+
     const job =
-      this.get(id);
+      this.jobs.get(
+        normalizedId,
+      );
+
+    if (
+      !job
+    ) {
+      throw new CaeError(
+        "JOB_NOT_FOUND",
+        "Job not found",
+        [normalizedId],
+      );
+    }
 
     if (
       job.state ===
@@ -1010,7 +1166,7 @@ export class JobEngine {
     ) {
       throw new CaeError(
         "JOB_NOT_RETRYABLE",
-        `Active job ${id} cannot be removed.`,
+        `Active job ${normalizedId} cannot be removed.`,
       );
     }
 

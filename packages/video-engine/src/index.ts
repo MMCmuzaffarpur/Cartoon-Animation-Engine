@@ -26,6 +26,12 @@ import {
   FrameEvaluator,
 } from "../../frame-evaluation/src/index.js";
 
+import {
+  getVideoProfile,
+  requireVideoProfile,
+  type VideoProfile,
+} from "./profiles.js";
+
 /* -------------------------------------------------------------------------- */
 /* Public Types                                                               */
 /* -------------------------------------------------------------------------- */
@@ -34,9 +40,41 @@ export interface VideoOptions {
   ffmpeg: string;
   output: string;
 
+  /**
+   * Optional built-in video profile.
+   *
+   * When supplied, the profile becomes authoritative for:
+   * - width
+   * - height
+   * - fps
+   */
+  profile?: string;
+
+  /**
+   * Manual rendering values.
+   *
+   * These remain supported for backward compatibility.
+   *
+   * When profile is supplied, profile values override these fields.
+   */
+  width?: number;
+  height?: number;
+  fps?: number;
+
+  startTick: number;
+  endTick: number;
+
+  tickRate: number;
+}
+
+export interface NormalizedVideoOptions {
+  ffmpeg: string;
+  output: string;
+
+  profile?: VideoProfile;
+
   width: number;
   height: number;
-
   fps: number;
 
   startTick: number;
@@ -63,6 +101,8 @@ export interface VideoRenderResult {
   renderer: "svg-ffmpeg";
 
   version: "1.0.0";
+
+  profile?: string;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -257,6 +297,46 @@ function assertFps(
   }
 }
 
+/* -------------------------------------------------------------------------- */
+/* Profile Resolution                                                         */
+/* -------------------------------------------------------------------------- */
+
+function resolveProfile(
+  profileId: unknown,
+): VideoProfile {
+  const normalized =
+    requireNonEmptyString(
+      profileId,
+      "Video profile",
+    );
+
+  try {
+    return requireVideoProfile(
+      normalized,
+    );
+  } catch {
+    throw new CaeError(
+      "RENDER_FAILED",
+      `Unknown video profile "${normalized}".`,
+    );
+  }
+}
+
+function durationSeconds(
+  startTick: number,
+  endTick: number,
+  tickRate: number,
+): number {
+  return (
+    endTick -
+    startTick
+  ) / tickRate;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Frame Helpers                                                              */
+/* -------------------------------------------------------------------------- */
+
 function calculateFrameCount(
   startTick: number,
   endTick: number,
@@ -272,7 +352,7 @@ function calculateFrameCount(
     tickRate;
 
   /*
-   * The render range is [startTick, endTick).
+   * Render range is [startTick, endTick).
    *
    * ceil() ensures that a positive duration always produces
    * at least one presentation frame.
@@ -446,7 +526,7 @@ export class VideoEngine {
 
   validateOptions(
     options: VideoOptions,
-  ): VideoOptions {
+  ): NormalizedVideoOptions {
     if (
       !isRecord(options)
     ) {
@@ -468,41 +548,92 @@ export class VideoEngine {
         "Video output path",
       );
 
+    let profile:
+      VideoProfile | undefined;
+
+    if (
+      options.profile !==
+      undefined
+    ) {
+      profile =
+        resolveProfile(
+          options.profile,
+        );
+    }
+
+    /*
+     * Profile is authoritative.
+     *
+     * This means:
+     *
+     * profile = youtube-shorts
+     *
+     * always produces:
+     *
+     * 1080 × 1920 @ 30 FPS
+     *
+     * even if legacy width/height/fps values are supplied.
+     */
     const width =
+      profile
+        ? profile.width
+        : (
+            options.width ??
+            DEFAULT_WIDTH
+          );
+
+    const height =
+      profile
+        ? profile.height
+        : (
+            options.height ??
+            DEFAULT_HEIGHT
+          );
+
+    const fps =
+      profile
+        ? profile.fps
+        : (
+            options.fps ??
+            DEFAULT_FPS
+          );
+
+    const normalizedWidth =
       requirePositiveInteger(
-        options.width,
+        width,
         "Video width",
       );
 
-    const height =
+    const normalizedHeight =
       requirePositiveInteger(
-        options.height,
+        height,
         "Video height",
       );
 
     assertDimension(
-      width,
+      normalizedWidth,
       "Video width",
     );
 
     assertDimension(
-      height,
+      normalizedHeight,
       "Video height",
     );
 
-    const fps =
+    const normalizedFps =
       requirePositiveFinite(
-        options.fps,
+        fps,
         "Video FPS",
       );
 
     assertFps(
-      fps,
+      normalizedFps,
     );
 
     const tickRate =
       requirePositiveFinite(
-        options.tickRate,
+        options.tickRate ??
+          DEFAULT_TICK_RATE,
         "Video tickRate",
       );
 
@@ -528,6 +659,32 @@ export class VideoEngine {
       );
     }
 
+    /*
+     * Enforce platform/profile duration policy.
+     */
+    if (
+      profile &&
+      profile.maxDurationSeconds !==
+        null
+    ) {
+      const seconds =
+        durationSeconds(
+          startTick,
+          endTick,
+          tickRate,
+        );
+
+      if (
+        seconds >
+        profile.maxDurationSeconds
+      ) {
+        throw new CaeError(
+          "RENDER_FAILED",
+          `Video duration ${String(seconds)} seconds exceeds the ${profile.name} profile maximum of ${String(profile.maxDurationSeconds)} seconds.`,
+        );
+      }
+    }
+
     return {
       ffmpeg,
 
@@ -536,10 +693,20 @@ export class VideoEngine {
           output,
         ),
 
-      width,
-      height,
+      ...(profile
+        ? {
+            profile,
+          }
+        : {}),
 
-      fps,
+      width:
+        normalizedWidth,
+
+      height:
+        normalizedHeight,
+
+      fps:
+        normalizedFps,
 
       startTick,
       endTick,
@@ -567,7 +734,7 @@ export class VideoEngine {
       project === undefined
     ) {
       throw new CaeError(
-         "RENDER_FAILED",
+        "RENDER_FAILED",
         "Project is required for video rendering.",
       );
     }
@@ -592,9 +759,7 @@ export class VideoEngine {
     );
 
     /*
-     * A dedicated temporary directory is created for every render.
-     *
-     * This prevents concurrent renders from sharing frame files.
+     * Dedicated temporary directory per render.
      */
     const tempRoot =
       join(
@@ -720,7 +885,8 @@ export class VideoEngine {
           "-an",
 
           "-c:v",
-          "libx264",
+          normalized.profile?.videoCodec ??
+            "libx264",
 
           "-preset",
           "medium",
@@ -729,7 +895,8 @@ export class VideoEngine {
           "18",
 
           "-pix_fmt",
-          "yuv420p",
+          normalized.profile?.pixelFormat ??
+            "yuv420p",
 
           "-movflags",
           "+faststart",
@@ -767,6 +934,13 @@ export class VideoEngine {
 
         version:
           VIDEO_ENGINE_VERSION,
+
+        ...(normalized.profile
+          ? {
+              profile:
+                normalized.profile.id,
+            }
+          : {}),
       };
     } catch (
       error
@@ -788,7 +962,7 @@ export class VideoEngine {
       );
     } finally {
       /*
-       * Temporary SVG frames must never remain after the job finishes.
+       * Temporary SVG frames must never remain.
        */
       await rm(
         frameDirectory,
