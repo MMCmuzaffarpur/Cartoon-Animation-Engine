@@ -2282,36 +2282,60 @@ export class LipSyncEngine {
   }
 
   validateResult(
-    track: LipSyncTrack,
-  ): LipSyncValidationResult {
-    const errors: string[] =
-      [];
+  track: LipSyncTrack,
+): LipSyncValidationResult {
+  const errors: string[] = [];
 
-    const parsed =
-      LipSyncTrackSchema.safeParse(
-        track,
-      );
+  const formatIssuePath = (
+    path: PropertyKey[],
+  ): string => {
+    let result = "";
 
-    if (
-      !parsed.success
-    ) {
-      errors.push(
-        ...parsed.error.issues.map(
-          (issue) =>
-            `${issue.path.join(".")}: ${issue.message}`,
-        ),
-      );
-
-      return {
-        valid: false,
-        errors,
-      };
+    for (const segment of path) {
+      if (typeof segment === "number") {
+        result += `[${segment}]`;
+      } else {
+        result += result
+          ? `.${String(segment)}`
+          : String(segment);
+      }
     }
 
+    return result;
+  };
+
+  const parsed =
+    LipSyncTrackSchema.safeParse(track);
+
+  /*
+   * Schema validation errors are collected but
+   * custom engine validation also continues.
+   *
+   * Array indexes are formatted as:
+   * visemes[0].weight
+   */
+  if (!parsed.success) {
+    errors.push(
+      ...parsed.error.issues.map(
+        (issue) => {
+          const path =
+            formatIssuePath(
+              issue.path,
+            );
+
+          return `${path}: ${issue.message}`;
+        },
+      ),
+    );
+  }
+
+  /*
+   * Phoneme validation
+   */
+  if (Array.isArray(track.phonemes)) {
     for (
       let i = 0;
-      i <
-      track.phonemes.length;
+      i < track.phonemes.length;
       i += 1
     ) {
       errors.push(
@@ -2321,11 +2345,15 @@ export class LipSyncEngine {
         ),
       );
     }
+  }
 
+  /*
+   * Viseme validation
+   */
+  if (Array.isArray(track.visemes)) {
     for (
       let i = 0;
-      i <
-      track.visemes.length;
+      i < track.visemes.length;
       i += 1
     ) {
       errors.push(
@@ -2335,23 +2363,27 @@ export class LipSyncEngine {
         ),
       );
     }
+  }
 
+  /*
+   * Manual override validation
+   */
+  if (
+    Array.isArray(
+      track.manualOverrides,
+    )
+  ) {
     for (
       let i = 0;
-      i <
-      track.manualOverrides
-        .length;
+      i < track.manualOverrides.length;
       i += 1
     ) {
       try {
         this.validateManualOverride(
-          track.manualOverrides[
-            i
-          ] as unknown as ManualOverride,
+          track.manualOverrides[i] as
+            unknown as ManualOverride,
         );
-      } catch (
-        error
-      ) {
+      } catch (error) {
         errors.push(
           `manualOverrides[${i}]: ${
             error instanceof Error
@@ -2361,17 +2393,20 @@ export class LipSyncEngine {
         );
       }
     }
+  }
 
+  /*
+   * Curve validation
+   */
+  if (Array.isArray(track.curves)) {
     for (
       let i = 0;
-      i <
-      track.curves.length;
+      i < track.curves.length;
       i += 1
     ) {
       const curve =
-        track.curves[
-          i
-        ] as unknown as LipSyncCurve;
+        track.curves[i] as
+          unknown as LipSyncCurve;
 
       if (
         !Number.isInteger(
@@ -2427,58 +2462,55 @@ export class LipSyncEngine {
         );
       }
     }
+  }
 
-    /*
-     * Canonical ordering checks.
-     */
-
+  /*
+   * Canonical phoneme ordering
+   */
+  if (Array.isArray(track.phonemes)) {
     for (
       let i = 0;
       i <
-      track.phonemes.length -
-        1;
+        track.phonemes.length - 1;
       i += 1
     ) {
       if (
-        track.phonemes[i]
-          .startTick >
-        track.phonemes[
-          i + 1
-        ].startTick
+        track.phonemes[i].startTick >
+        track.phonemes[i + 1].startTick
       ) {
         errors.push(
           "Phoneme events must be ordered by startTick.",
         );
       }
     }
+  }
 
+  /*
+   * Canonical viseme ordering
+   */
+  if (Array.isArray(track.visemes)) {
     for (
       let i = 0;
       i <
-      track.visemes.length -
-        1;
+        track.visemes.length - 1;
       i += 1
     ) {
       if (
-        track.visemes[i]
-          .startTick >
-        track.visemes[
-          i + 1
-        ].startTick
+        track.visemes[i].startTick >
+        track.visemes[i + 1].startTick
       ) {
         errors.push(
           "Viseme events must be ordered by startTick.",
         );
       }
     }
-
-    return {
-      valid:
-        errors.length === 0,
-
-      errors,
-    };
   }
+
+  return {
+    valid: errors.length === 0,
+    errors,
+  };
+}
 
   /* ------------------------------------------------------------------------ */
   /* Fingerprint                                                              */

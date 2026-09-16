@@ -5,685 +5,1012 @@ import {
 } from "vitest";
 
 import {
-  HUMANOID_RIG_ID_2D,
-  HUMANOID_RIG_ID_3D,
-  RigEngine,
+  RIG_ENGINE_VERSION,
+  RIG_SCHEMA_VERSION,
+  RigCatalog,
+  createCharacterRig,
+  createRigJoint,
+  fingerprintRig,
+  topologicalJointOrder,
+  validateCharacterRig,
 } from "../packages/rig-engine/src/index.js";
 
-describe("Rig Engine", () => {
-  const engine =
-    new RigEngine();
+const ROOT =
+  "00000000-0000-4000-8000-000000000101";
 
-  /* ---------------------------------------------------------------------- */
-  /* Humanoid Creation                                                      */
-  /* ---------------------------------------------------------------------- */
+const SPINE =
+  "00000000-0000-4000-8000-000000000102";
 
-  it("creates a valid deterministic 2D humanoid rig", () => {
-    const rig =
-      engine.createHumanoid("2d");
+const HEAD =
+  "00000000-0000-4000-8000-000000000103";
 
-    expect(rig.id).toBe(
-      HUMANOID_RIG_ID_2D,
-    );
+const ARM =
+  "00000000-0000-4000-8000-000000000104";
 
-    expect(rig.dimension).toBe(
-      "2d",
-    );
+const HAND =
+  "00000000-0000-4000-8000-000000000105";
 
-    expect(rig.name).toBe(
-      "Humanoid 2D",
-    );
+function makeRig(
+  overrides: Record<
+    string,
+    unknown
+  > = {},
+) {
+  return createCharacterRig({
+    rigId:
+      "00000000-0000-4000-8000-000000000201",
 
-    expect(rig.joints.length).toBe(
-      18,
-    );
+    characterAssemblyId:
+      "00000000-0000-4000-8000-000000000301",
 
-    expect(rig.controls.length).toBeGreaterThan(
-      0,
-    );
-
-    expect(rig.constraints.length).toBeGreaterThan(
-      0,
-    );
-  });
-
-  it("creates a valid deterministic 3D humanoid rig", () => {
-    const rig =
-      engine.createHumanoid("3d");
-
-    expect(rig.id).toBe(
-      HUMANOID_RIG_ID_3D,
-    );
-
-    expect(rig.dimension).toBe(
+    representation:
       "3d",
-    );
 
-    expect(rig.name).toBe(
-      "Humanoid 3D",
-    );
+    rootJointId:
+      ROOT,
 
-    expect(rig.joints.length).toBe(
-      18,
-    );
+    joints: [
+      {
+        jointId:
+          ROOT,
+        name:
+          "Root",
+        type:
+          "root",
+        length:
+          1,
+      },
+
+      {
+        jointId:
+          SPINE,
+        name:
+          "Spine",
+        type:
+          "spine",
+        parentJointId:
+          ROOT,
+        length:
+          1,
+      },
+
+      {
+        jointId:
+          HEAD,
+        name:
+          "Head",
+        type:
+          "head",
+        parentJointId:
+          SPINE,
+        length:
+          0.5,
+      },
+
+      {
+        jointId:
+          ARM,
+        name:
+          "UpperArm.L",
+        type:
+          "upper-arm",
+        parentJointId:
+          SPINE,
+        length:
+          1,
+      },
+
+      {
+        jointId:
+          HAND,
+        name:
+          "Hand.L",
+        type:
+          "hand",
+        parentJointId:
+          ARM,
+        length:
+          0.5,
+      },
+    ],
+
+    ...overrides,
   });
+}
 
-  it("creates identical rigs deterministically", () => {
-    const first =
-      engine.createHumanoid("2d");
+describe(
+  "Rig Engine",
+  () => {
+    describe(
+      "joint creation",
+      () => {
+        it(
+          "creates a deterministic joint with defaults",
+          () => {
+            const joint =
+              createRigJoint({
+                jointId:
+                  ROOT,
+                name:
+                  "Root",
+                type:
+                  "root",
+              });
 
-    const second =
-      engine.createHumanoid("2d");
+            expect(
+              joint.jointId,
+            ).toBe(
+              ROOT,
+            );
 
-    expect(first).toEqual(
-      second,
+            expect(
+              joint.localTransform.position,
+            ).toEqual({
+              x: 0,
+              y: 0,
+              z: 0,
+            });
+
+            expect(
+              joint.localTransform.rotation,
+            ).toEqual({
+              x: 0,
+              y: 0,
+              z: 0,
+              w: 1,
+            });
+
+            expect(
+              joint.localTransform.scale,
+            ).toEqual({
+              x: 1,
+              y: 1,
+              z: 1,
+            });
+          },
+        );
+
+        it(
+          "normalizes quaternion",
+          () => {
+            const joint =
+              createRigJoint({
+                name:
+                  "Joint",
+                type:
+                  "custom",
+                localTransform: {
+                  rotation: {
+                    x: 0,
+                    y: 0,
+                    z: 0,
+                    w: 2,
+                  },
+                },
+              });
+
+            expect(
+              joint.localTransform
+                .rotation.w,
+            ).toBe(1);
+          },
+        );
+
+        it(
+          "rejects zero quaternion",
+          () => {
+            expect(
+              () =>
+                createRigJoint({
+                  name:
+                    "Joint",
+                  type:
+                    "custom",
+                  localTransform: {
+                    rotation: {
+                      x: 0,
+                      y: 0,
+                      z: 0,
+                      w: 0,
+                    },
+                  },
+                }),
+            ).toThrow(
+              /zero length/i,
+            );
+          },
+        );
+
+        it(
+          "rejects negative joint length",
+          () => {
+            expect(
+              () =>
+                createRigJoint({
+                  name:
+                    "Joint",
+                  type:
+                    "custom",
+                  length:
+                    -1,
+                }),
+            ).toThrow(
+              /must not be negative/i,
+            );
+          },
+        );
+      },
     );
 
-    expect(
-      engine.fingerprint(first),
-    ).toBe(
-      engine.fingerprint(second),
-    );
-  });
+    describe(
+      "rig creation",
+      () => {
+        it(
+          "creates a complete rig",
+          () => {
+            const rig =
+              makeRig();
 
-  it("creates different identities for 2D and 3D rigs", () => {
-    const rig2d =
-      engine.createHumanoid("2d");
+            expect(
+              rig.schemaVersion,
+            ).toBe(
+              RIG_SCHEMA_VERSION,
+            );
 
-    const rig3d =
-      engine.createHumanoid("3d");
+            expect(
+              rig.joints,
+            ).toHaveLength(5);
 
-    expect(rig2d.id).not.toBe(
-      rig3d.id,
-    );
+            expect(
+              rig.rootJointId,
+            ).toBe(
+              ROOT,
+            );
 
-    expect(rig2d.dimension).not.toBe(
-      rig3d.dimension,
-    );
-  });
+            expect(
+              rig.contentHash,
+            ).toMatch(
+              /^[a-f0-9]{64}$/i,
+            );
+          },
+        );
 
-  /* ---------------------------------------------------------------------- */
-  /* Skeleton Hierarchy                                                      */
-  /* ---------------------------------------------------------------------- */
+        it(
+          "uses current engine version",
+          () => {
+            expect(
+              RIG_ENGINE_VERSION,
+            ).toBe(
+              "1.0.0",
+            );
+          },
+        );
 
-  it("creates the correct humanoid hierarchy", () => {
-    const rig =
-      engine.createHumanoid("2d");
+        it(
+          "produces deterministic fingerprints",
+          () => {
+            const a =
+              makeRig();
 
-    const jointMap =
-      new Map(
-        rig.joints.map(
-          (joint) => [
-            joint.id,
-            joint,
-          ],
-        ),
-      );
+            const b =
+              makeRig();
 
-    expect(
-      jointMap.get("root")?.parentId,
-    ).toBeNull();
+            expect(
+              a.contentHash,
+            ).toBe(
+              b.contentHash,
+            );
+          },
+        );
 
-    expect(
-      jointMap.get("pelvis")?.parentId,
-    ).toBe("root");
+        it(
+          "changes fingerprint when joint changes",
+          () => {
+            const a =
+              makeRig();
 
-    expect(
-      jointMap.get("spine")?.parentId,
-    ).toBe("pelvis");
+            const b =
+              makeRig({
+                joints: [
+                  {
+                    jointId:
+                      ROOT,
+                    name:
+                      "Root",
+                    type:
+                      "root",
+                    length:
+                      2,
+                  },
 
-    expect(
-      jointMap.get("chest")?.parentId,
-    ).toBe("spine");
+                  {
+                    jointId:
+                      SPINE,
+                    name:
+                      "Spine",
+                    type:
+                      "spine",
+                    parentJointId:
+                      ROOT,
+                  },
 
-    expect(
-      jointMap.get("neck")?.parentId,
-    ).toBe("chest");
+                  {
+                    jointId:
+                      HEAD,
+                    name:
+                      "Head",
+                    type:
+                      "head",
+                    parentJointId:
+                      SPINE,
+                  },
+                ],
+              });
 
-    expect(
-      jointMap.get("head")?.parentId,
-    ).toBe("neck");
-
-    expect(
-      jointMap.get("upper_arm.L")?.parentId,
-    ).toBe("chest");
-
-    expect(
-      jointMap.get("lower_arm.L")?.parentId,
-    ).toBe("upper_arm.L");
-
-    expect(
-      jointMap.get("hand.L")?.parentId,
-    ).toBe("lower_arm.L");
-
-    expect(
-      jointMap.get("upper_arm.R")?.parentId,
-    ).toBe("chest");
-
-    expect(
-      jointMap.get("lower_arm.R")?.parentId,
-    ).toBe("upper_arm.R");
-
-    expect(
-      jointMap.get("hand.R")?.parentId,
-    ).toBe("lower_arm.R");
-
-    expect(
-      jointMap.get("upper_leg.L")?.parentId,
-    ).toBe("pelvis");
-
-    expect(
-      jointMap.get("lower_leg.L")?.parentId,
-    ).toBe("upper_leg.L");
-
-    expect(
-      jointMap.get("foot.L")?.parentId,
-    ).toBe("lower_leg.L");
-
-    expect(
-      jointMap.get("upper_leg.R")?.parentId,
-    ).toBe("pelvis");
-
-    expect(
-      jointMap.get("lower_leg.R")?.parentId,
-    ).toBe("upper_leg.R");
-
-    expect(
-      jointMap.get("foot.R")?.parentId,
-    ).toBe("lower_leg.R");
-  });
-
-  /* ---------------------------------------------------------------------- */
-  /* Controls                                                                */
-  /* ---------------------------------------------------------------------- */
-
-  it("creates required humanoid controls", () => {
-    const rig =
-      engine.createHumanoid("2d");
-
-    const controlIds =
-      new Set(
-        rig.controls.map(
-          (control) =>
-            control.id,
-        ),
-      );
-
-    expect(
-      controlIds.has(
-        "root-control",
-      ),
-    ).toBe(true);
-
-    expect(
-      controlIds.has(
-        "head-control",
-      ),
-    ).toBe(true);
-
-    expect(
-      controlIds.has(
-        "hand.L-ik",
-      ),
-    ).toBe(true);
-
-    expect(
-      controlIds.has(
-        "hand.R-ik",
-      ),
-    ).toBe(true);
-
-    expect(
-      controlIds.has(
-        "foot.L-ik",
-      ),
-    ).toBe(true);
-
-    expect(
-      controlIds.has(
-        "foot.R-ik",
-      ),
-    ).toBe(true);
-  });
-
-  it("applies a control immutably", () => {
-    const rig =
-      engine.createHumanoid("2d");
-
-    const result =
-      engine.applyControl(
-        rig,
-        "root-control",
-        0.75,
-      );
-
-    expect(result).not.toBe(
-      rig,
+            expect(
+              a.contentHash,
+            ).not.toBe(
+              b.contentHash,
+            );
+          },
+        );
+      },
     );
 
-    expect(
-      rig.constraints.some(
-        (constraint) =>
-          constraint.type ===
-          "control_value",
-      ),
-    ).toBe(false);
+    describe(
+      "hierarchy validation",
+      () => {
+        it(
+          "rejects duplicate joint ids",
+          () => {
+            expect(
+              () =>
+                makeRig({
+                  joints: [
+                    {
+                      jointId:
+                        ROOT,
+                      name:
+                        "Root A",
+                      type:
+                        "root",
+                    },
+                    {
+                      jointId:
+                        ROOT,
+                      name:
+                        "Root B",
+                      type:
+                        "root",
+                    },
+                  ],
+                }),
+            ).toThrow(
+              /duplicate joint/i,
+            );
+          },
+        );
 
-    expect(
-      result.constraints.some(
-        (constraint) =>
-          constraint.type ===
-          "control_value",
-      ),
-    ).toBe(true);
-  });
+        it(
+          "rejects self parenting",
+          () => {
+            expect(
+              () =>
+                makeRig({
+                  joints: [
+                    {
+                      jointId:
+                        ROOT,
+                      name:
+                        "Root",
+                      type:
+                        "root",
+                      parentJointId:
+                        ROOT,
+                    },
+                  ],
+                }),
+            ).toThrow(
+              /cannot parent itself/i,
+            );
+          },
+        );
 
-  it("clamps control values to the canonical range", () => {
-    const rig =
-      engine.createHumanoid("2d");
+        it(
+          "rejects missing parent",
+          () => {
+            expect(
+              () =>
+                makeRig({
+                  joints: [
+                    {
+                      jointId:
+                        ROOT,
+                      name:
+                        "Root",
+                      type:
+                        "root",
+                    },
+                    {
+                      jointId:
+                        SPINE,
+                      name:
+                        "Spine",
+                      type:
+                        "spine",
+                      parentJointId:
+                        "00000000-0000-4000-8000-000000000999",
+                    },
+                  ],
+                }),
+            ).toThrow(
+              /Parent joint/i,
+            );
+          },
+        );
 
-    const result =
-      engine.applyControl(
-        rig,
-        "root-control",
-        100,
-      );
+        it(
+          "rejects cyclic hierarchy",
+          () => {
+            expect(
+              () =>
+                makeRig({
+                  rootJointId:
+                    ROOT,
+                  joints: [
+                    {
+                      jointId:
+                        ROOT,
+                      name:
+                        "Root",
+                      type:
+                        "root",
+                      parentJointId:
+                        SPINE,
+                    },
+                    {
+                      jointId:
+                        SPINE,
+                      name:
+                        "Spine",
+                      type:
+                        "spine",
+                      parentJointId:
+                        ROOT,
+                    },
+                  ],
+                }),
+            ).toThrow(
+              /cyclic/i,
+            );
+          },
+        );
 
-    const controlValue =
-      result.constraints.find(
-        (constraint) =>
-          constraint.type ===
-          "control_value",
-      ) as
-        | {
-            type: string;
-            controlId: string;
-            value: number;
-          }
-        | undefined;
+        it(
+          "rejects multiple roots without explicit root",
+          () => {
+            expect(
+              () =>
+                createCharacterRig({
+                  characterAssemblyId:
+                    "00000000-0000-4000-8000-000000000301",
+                  representation:
+                    "3d",
+                  joints: [
+                    {
+                      jointId:
+                        ROOT,
+                      name:
+                        "Root",
+                      type:
+                        "root",
+                    },
+                    {
+                      jointId:
+                        SPINE,
+                      name:
+                        "SecondRoot",
+                      type:
+                        "root",
+                    },
+                  ],
+                }),
+            ).toThrow(
+              /Multiple root/i,
+            );
+          },
+        );
 
-    expect(
-      controlValue?.value,
-    ).toBe(1);
-  });
-
-  it("rejects an unknown control", () => {
-    const rig =
-      engine.createHumanoid("2d");
-
-    expect(() =>
-      engine.applyControl(
-        rig,
-        "does-not-exist",
-        0.5,
-      ),
-    ).toThrow();
-  });
-
-  /* ---------------------------------------------------------------------- */
-  /* Validation                                                              */
-  /* ---------------------------------------------------------------------- */
-
-  it("validates a correct rig", () => {
-    const rig =
-      engine.createHumanoid("2d");
-
-    const result =
-      engine.validateRig(rig);
-
-    expect(result.valid).toBe(
-      true,
+        it(
+          "rejects root with parent",
+          () => {
+            expect(
+              () =>
+                makeRig({
+                  rootJointId:
+                    SPINE,
+                  joints: [
+                    {
+                      jointId:
+                        ROOT,
+                      name:
+                        "Root",
+                      type:
+                        "root",
+                    },
+                    {
+                      jointId:
+                        SPINE,
+                      name:
+                        "Spine",
+                      type:
+                        "spine",
+                      parentJointId:
+                        ROOT,
+                    },
+                  ],
+                }),
+            ).toThrow(
+              /cannot have a parent/i,
+            );
+          },
+        );
+      },
     );
 
-    expect(result.errors).toEqual(
-      [],
-    );
-  });
+    describe(
+      "children",
+      () => {
+        it(
+          "rebuilds children deterministically",
+          () => {
+            const rig =
+              makeRig();
 
-  it("rejects duplicate joints", () => {
-    const rig =
-      engine.createHumanoid("2d");
+            const spine =
+              rig.joints.find(
+                (joint) =>
+                  joint.jointId ===
+                  SPINE,
+              );
 
-    const broken = {
-      ...rig,
-      joints: [
-        ...rig.joints,
-        {
-          ...rig.joints[0],
-        },
-      ],
-    };
+            expect(
+              spine?.children,
+            ).toEqual([
+              ARM,
+              HEAD,
+            ]);
+          },
+        );
 
-    const result =
-      engine.validateRig(
-        broken,
-      );
+        it(
+          "creates dependency-first order",
+          () => {
+            const rig =
+              makeRig();
 
-    expect(result.valid).toBe(
-      false,
-    );
+            const reversed =
+              [
+                ...rig.joints,
+              ].reverse();
 
-    expect(
-      result.errors.some(
-        (error) =>
-          error.includes(
-            "Duplicate joint id",
-          ),
-      ),
-    ).toBe(true);
-  });
+            const ordered =
+              topologicalJointOrder(
+                reversed,
+              );
 
-  it("rejects a missing parent", () => {
-    const rig =
-      engine.createHumanoid("2d");
-
-    const broken = {
-      ...rig,
-      joints:
-        rig.joints.map(
-          (joint) =>
-            joint.id ===
-            "pelvis"
-              ? {
-                  ...joint,
-                  parentId:
-                    "missing-parent",
-                }
-              : joint,
-        ),
-    };
-
-    const result =
-      engine.validateRig(
-        broken,
-      );
-
-    expect(result.valid).toBe(
-      false,
-    );
-  });
-
-  it("rejects hierarchy cycles", () => {
-    const rig =
-      engine.createHumanoid("2d");
-
-    const broken = {
-      ...rig,
-      joints:
-        rig.joints.map(
-          (joint) =>
-            joint.id ===
-            "root"
-              ? {
-                  ...joint,
-                  parentId:
-                    "pelvis",
-                }
-              : joint,
-        ),
-    };
-
-    const result =
-      engine.validateRig(
-        broken,
-      );
-
-    expect(result.valid).toBe(
-      false,
+            expect(
+              ordered.map(
+                (joint) =>
+                  joint.jointId,
+              ),
+            ).toEqual([
+              ROOT,
+              SPINE,
+              ARM,
+              HAND,
+              HEAD,
+            ]);
+          },
+        );
+      },
     );
 
-    expect(
-      result.errors.some(
-        (error) =>
-          error.includes(
-            "cycle",
-          ),
-      ),
-    ).toBe(true);
-  });
+    describe(
+      "IK",
+      () => {
+        it(
+          "creates and validates an IK chain",
+          () => {
+            const rig =
+              makeRig({
+                ikChains: [
+                  {
+                    chainId:
+                      "00000000-0000-4000-8000-000000000401",
+                    name:
+                      "Left Arm",
+                    type:
+                      "two-bone",
+                    rootJointId:
+                      ARM,
+                    endJointId:
+                      HAND,
+                    joints: [
+                      ARM,
+                      HAND,
+                    ],
+                    iterations:
+                      20,
+                    tolerance:
+                      0.0001,
+                  },
+                ],
+              });
 
-  /* ---------------------------------------------------------------------- */
-  /* 2D IK                                                                    */
-  /* ---------------------------------------------------------------------- */
+            expect(
+              rig.ikChains,
+            ).toHaveLength(1);
 
-  it("solves a reachable 2D two-bone IK target", () => {
-    const result =
-      engine.solveTwoBoneIK2D(
-        {
-          x: 0,
-          y: 0,
-        },
-        {
-          x: 1,
-          y: 0,
-        },
-        {
-          x: 2,
-          y: 0,
-        },
-        {
-          x: 1,
-          y: 1,
-        },
-      );
+            expect(
+              rig.ikChains[0]
+                .iterations,
+            ).toBe(20);
+          },
+        );
 
-    expect(result.reachable).toBe(
-      true,
+        it(
+          "rejects missing IK joint",
+          () => {
+            expect(
+              () =>
+                makeRig({
+                  ikChains: [
+                    {
+                      name:
+                        "Invalid",
+                      type:
+                        "two-bone",
+                      rootJointId:
+                        ARM,
+                      endJointId:
+                        "00000000-0000-4000-8000-000000000999",
+                    },
+                  ],
+                }),
+            ).toThrow(
+              /IK end joint/i,
+            );
+          },
+        );
+
+        it(
+          "rejects identical IK root and end",
+          () => {
+            expect(
+              () =>
+                makeRig({
+                  ikChains: [
+                    {
+                      name:
+                        "Invalid",
+                      type:
+                        "two-bone",
+                      rootJointId:
+                        ARM,
+                      endJointId:
+                        ARM,
+                    },
+                  ],
+                }),
+            ).toThrow(
+              /cannot be identical/i,
+            );
+          },
+        );
+      },
     );
 
-    expect(
-      result.targetDistance,
-    ).toBeCloseTo(
-      Math.sqrt(2),
-      6,
+    describe(
+      "catalog",
+      () => {
+        it(
+          "registers and retrieves rig",
+          () => {
+            const catalog =
+              new RigCatalog();
+
+            const rig =
+              makeRig();
+
+            catalog.register(
+              rig,
+            );
+
+            expect(
+              catalog.require(
+                rig.rigId,
+              ),
+            ).toEqual(
+              rig,
+            );
+          },
+        );
+
+        it(
+          "returns defensive copies",
+          () => {
+            const catalog =
+              new RigCatalog();
+
+            const rig =
+              makeRig();
+
+            catalog.register(
+              rig,
+            );
+
+            const retrieved =
+              catalog.require(
+                rig.rigId,
+              );
+
+            (
+              retrieved.metadata as
+                Record<
+                  string,
+                  unknown
+                >
+            ).test =
+              "changed";
+
+            const again =
+              catalog.require(
+                rig.rigId,
+              );
+
+            expect(
+              again.metadata.test,
+            ).toBeUndefined();
+          },
+        );
+
+        it(
+          "lists rigs deterministically",
+          () => {
+            const catalog =
+              new RigCatalog();
+
+            const first =
+              makeRig({
+                rigId:
+                  "00000000-0000-4000-8000-000000000202",
+              });
+
+            const second =
+              makeRig({
+                rigId:
+                  "00000000-0000-4000-8000-000000000203",
+              });
+
+            catalog.register(
+              second,
+            );
+
+            catalog.register(
+              first,
+            );
+
+            expect(
+              catalog.list().map(
+                (rig) =>
+                  rig.rigId,
+              ),
+            ).toEqual([
+              "00000000-0000-4000-8000-000000000202",
+              "00000000-0000-4000-8000-000000000203",
+            ]);
+          },
+        );
+
+        it(
+          "finds a joint",
+          () => {
+            const catalog =
+              new RigCatalog();
+
+            const rig =
+              makeRig();
+
+            catalog.register(
+              rig,
+            );
+
+            expect(
+              catalog.requireJoint(
+                rig.rigId,
+                HAND,
+              ).name,
+            ).toBe(
+              "Hand.L",
+            );
+          },
+        );
+
+        it(
+          "returns children",
+          () => {
+            const catalog =
+              new RigCatalog();
+
+            const rig =
+              makeRig();
+
+            catalog.register(
+              rig,
+            );
+
+            expect(
+              catalog.children(
+                rig.rigId,
+                SPINE,
+              ).map(
+                (joint) =>
+                  joint.jointId,
+              ),
+            ).toEqual([
+              ARM,
+              HEAD,
+            ]);
+          },
+        );
+
+        it(
+          "returns descendants",
+          () => {
+            const catalog =
+              new RigCatalog();
+
+            const rig =
+              makeRig();
+
+            catalog.register(
+              rig,
+            );
+
+            expect(
+              catalog.descendants(
+                rig.rigId,
+                SPINE,
+              ).map(
+                (joint) =>
+                  joint.jointId,
+              ),
+            ).toEqual([
+              ARM,
+              HAND,
+              HEAD,
+            ]);
+          },
+        );
+
+        it(
+          "returns statistics",
+          () => {
+            const catalog =
+              new RigCatalog();
+
+            catalog.register(
+              makeRig(),
+            );
+
+            expect(
+              catalog.stats(),
+            ).toEqual({
+              rigCount: 1,
+              jointCount: 5,
+              ikChainCount: 0,
+            });
+          },
+        );
+      },
     );
 
-    expect(
-      Number.isFinite(
-        result.rootRotation,
-      ),
-    ).toBe(true);
+    describe(
+      "validation",
+      () => {
+        it(
+          "accepts a correctly fingerprinted rig",
+          () => {
+            const rig =
+              makeRig();
 
-    expect(
-      Number.isFinite(
-        result.midRotation,
-      ),
-    ).toBe(true);
-  });
+            expect(
+              () =>
+                validateCharacterRig(
+                  rig,
+                ),
+            ).not.toThrow();
+          },
+        );
 
-  it("clamps an unreachable 2D IK target", () => {
-    const result =
-      engine.solveTwoBoneIK2D(
-        {
-          x: 0,
-          y: 0,
-        },
-        {
-          x: 1,
-          y: 0,
-        },
-        {
-          x: 2,
-          y: 0,
-        },
-        {
-          x: 10,
-          y: 0,
-        },
-      );
+        it(
+          "rejects tampered fingerprint",
+          () => {
+            const rig =
+              makeRig();
 
-    expect(result.reachable).toBe(
-      false,
+            const tampered =
+              {
+                ...rig,
+                contentHash:
+                  "tampered",
+              };
+
+            expect(
+              () =>
+                validateCharacterRig(
+                  tampered,
+                ),
+            ).toThrow(
+              /contentHash does not match/i,
+            );
+          },
+        );
+
+        it(
+          "fingerprint matches canonical fingerprint",
+          () => {
+            const rig =
+              makeRig();
+
+            const {
+              contentHash,
+              ...withoutHash
+            } = rig;
+
+            expect(
+              fingerprintRig(
+                withoutHash,
+              ),
+            ).toBe(
+              contentHash,
+            );
+          },
+        );
+      },
     );
 
-    expect(
-      result.clampedDistance,
-    ).toBeLessThan(2);
-  });
+    describe(
+      "removal",
+      () => {
+        it(
+          "removes a rig",
+          () => {
+            const catalog =
+              new RigCatalog();
 
-  it("rejects zero-length 2D IK bones", () => {
-    expect(() =>
-      engine.solveTwoBoneIK2D(
-        {
-          x: 0,
-          y: 0,
-        },
-        {
-          x: 0,
-          y: 0,
-        },
-        {
-          x: 1,
-          y: 0,
-        },
-        {
-          x: 1,
-          y: 1,
-        },
-      ),
-    ).toThrow();
-  });
+            const rig =
+              makeRig();
 
-  /* ---------------------------------------------------------------------- */
-  /* 3D IK                                                                    */
-  /* ---------------------------------------------------------------------- */
+            catalog.register(
+              rig,
+            );
 
-  it("solves a reachable 3D two-bone IK target", () => {
-    const result =
-      engine.solveTwoBoneIK3D(
-        {
-          x: 0,
-          y: 0,
-          z: 0,
-        },
-        {
-          x: 1,
-          y: 0,
-          z: 0,
-        },
-        {
-          x: 2,
-          y: 0,
-          z: 0,
-        },
-        {
-          x: 1,
-          y: 1,
-          z: 0,
-        },
-      );
+            expect(
+              catalog.remove(
+                rig.rigId,
+              ),
+            ).toBe(true);
 
-    expect(result.reachable).toBe(
-      true,
+            expect(
+              catalog.get(
+                rig.rigId,
+              ),
+            ).toBeUndefined();
+          },
+        );
+      },
     );
-
-    expect(
-      result.midPosition.x,
-    ).toBeCloseTo(
-      1,
-      5,
-    );
-
-    expect(
-      result.midPosition.y,
-    ).toBeGreaterThan(0);
-  });
-
-  it("clamps an unreachable 3D IK target", () => {
-    const result =
-      engine.solveTwoBoneIK3D(
-        {
-          x: 0,
-          y: 0,
-          z: 0,
-        },
-        {
-          x: 1,
-          y: 0,
-          z: 0,
-        },
-        {
-          x: 2,
-          y: 0,
-          z: 0,
-        },
-        {
-          x: 10,
-          y: 0,
-          z: 0,
-        },
-      );
-
-    expect(result.reachable).toBe(
-      false,
-    );
-
-    expect(
-      result.clampedDistance,
-    ).toBeLessThan(2);
-  });
-
-  /* ---------------------------------------------------------------------- */
-  /* Fingerprint                                                              */
-  /* ---------------------------------------------------------------------- */
-
-  it("produces a stable fingerprint", () => {
-    const rig =
-      engine.createHumanoid("2d");
-
-    const first =
-      engine.fingerprint(rig);
-
-    const second =
-      engine.fingerprint(
-        structuredClone(
-          rig,
-        ),
-      );
-
-    expect(first).toBe(
-      second,
-    );
-
-    expect(first.length).toBeGreaterThan(
-      0,
-    );
-  });
-
-  it("changes the fingerprint when rig state changes", () => {
-    const rig =
-      engine.createHumanoid("2d");
-
-    const changed =
-      engine.applyControl(
-        rig,
-        "root-control",
-        0.5,
-      );
-
-    expect(
-      engine.fingerprint(changed),
-    ).not.toBe(
-      engine.fingerprint(rig),
-    );
-  });
-
-  /* ---------------------------------------------------------------------- */
-  /* Contract Safety                                                         */
-  /* ---------------------------------------------------------------------- */
-
-  it("does not expose mutable references from validation", () => {
-    const rig =
-      engine.createHumanoid("2d");
-
-    const validated =
-      engine.validate(rig);
-
-    validated.joints[0].rest.x =
-      999;
-
-    expect(
-      rig.joints[0].rest.x,
-    ).toBe(0);
-  });
-});
+  },
+);

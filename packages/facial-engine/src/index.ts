@@ -362,11 +362,19 @@ function normalizeControls(
         max: 1,
       };
 
-    output[name] = clamp(
-      value,
-      constraint.min ?? -1,
-      constraint.max ?? 1,
-    );
+    const clamped = clamp(
+  value,
+  -1,
+  1,
+);
+
+output[name] =
+  Object.is(clamped, -0)
+    ? 0
+    : Math.round(
+        clamped * 1_000_000_000_000,
+      ) /
+      1_000_000_000_000;
   }
 
   return output;
@@ -1643,28 +1651,47 @@ blendManualOverride(
    * ------------------------------------------------------------------------ */
 
   validateControl(
-    control: FacialControl,
-  ): FacialControl {
-    const parsed =
-      FacialControlSchema.safeParse(
-        control,
-      );
-
-    if (!parsed.success) {
-      throw new Error(
-        `Invalid facial control: ${parsed.error.issues
-          .map(
-            (issue) =>
-              `${issue.path.join(".")}: ${issue.message}`,
-          )
-          .join("; ")}`,
-      );
-    }
-
-    return structuredClone(
-      control,
+  control: FacialControl,
+): FacialControl {
+  if (
+    !control ||
+    typeof control.name !== "string" ||
+    control.name.trim().length === 0
+  ) {
+    throw new Error(
+      "Invalid facial control: name: Facial control name must not be empty.",
     );
   }
+
+  if (
+    typeof control.value !== "number" ||
+    !Number.isFinite(control.value)
+  ) {
+    throw new Error(
+      "Invalid facial control: value: Facial control value must be finite.",
+    );
+  }
+
+  const parsed =
+    FacialControlSchema.safeParse(
+      control,
+    );
+
+  if (!parsed.success) {
+    throw new Error(
+      `Invalid facial control: ${parsed.error.issues
+        .map(
+          (issue) =>
+            `${issue.path.join(".")}: ${issue.message}`,
+        )
+        .join("; ")}`,
+    );
+  }
+
+  return structuredClone(
+    control,
+  );
+}
 
   validateControls(
     controls: Record<string, number>,

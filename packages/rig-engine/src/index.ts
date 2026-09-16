@@ -1,1300 +1,2097 @@
-import { createHash } from "node:crypto";
-import { z } from "zod";
-
 import {
-  RigDefinition as RigDefinitionSchema,
-} from "../../contracts/src/index.js";
+  canonicalHash,
+  CaeError,
+  uuid,
+} from "../../domain/src/index.js";
+
+import type {
+  CharacterAssembly,
+} from "../../character-assembly/src/index.js";
+
+/* -------------------------------------------------------------------------- */
+/* Version                                                                    */
+/* -------------------------------------------------------------------------- */
+
+export const RIG_ENGINE_VERSION = "1.0.0";
+export const RIG_SCHEMA_VERSION = "1.0.0";
 
 /* -------------------------------------------------------------------------- */
 /* Types                                                                      */
 /* -------------------------------------------------------------------------- */
 
-export type RigDimension = "2d" | "3d";
+export type RigRepresentation =
+  | "2d"
+  | "3d"
+  | "hybrid";
 
-export type RigControlKind =
+export type JointType =
   | "root"
-  | "position"
-  | "rotation"
-  | "scale"
-  | "ik"
-  | "pole"
-  | "head"
-  | "hand"
-  | "foot"
+  | "hip"
   | "spine"
+  | "chest"
+  | "neck"
+  | "head"
+  | "shoulder"
+  | "upper-arm"
+  | "lower-arm"
+  | "hand"
+  | "finger"
+  | "upper-leg"
+  | "lower-leg"
+  | "foot"
+  | "toe"
   | "custom";
 
-export interface JointTransform {
-  x: number;
-  y: number;
-  z: number;
-}
+export type ConstraintType =
+  | "rotation"
+  | "translation"
+  | "scale"
+  | "hinge"
+  | "ball"
+  | "limit";
 
-export interface RigJoint {
-  id: string;
-  parentId: string | null;
-  rest: JointTransform;
-}
+export type IKChainType =
+  | "two-bone"
+  | "multi-bone";
 
-export interface RigControl {
-  id: string;
-  kind: RigControlKind;
-  targetIds: string[];
-}
-
-export interface RotationLimitConstraint {
-  type: "limit_rotation";
-  jointId: string;
-  min: JointTransform;
-  max: JointTransform;
-}
-
-export interface TwoBoneIKConstraint {
-  type: "two_bone_ik";
-  rootJointId: string;
-  midJointId: string;
-  endJointId: string;
-  targetControlId: string;
-  poleControlId?: string;
-}
-
-export type RigConstraint =
-  | RotationLimitConstraint
-  | TwoBoneIKConstraint;
-
-/**
- * Canonical RigDefinition is defined by the contracts package.
- *
- * The contracts package exports a Zod schema/value, therefore the
- * TypeScript type must be inferred from that schema rather than imported
- * as a type value.
- */
-export type RigDefinition =
-  z.infer<typeof RigDefinitionSchema>;
-
-export interface Vec2 {
-  x: number;
-  y: number;
-}
+/* -------------------------------------------------------------------------- */
+/* Vector                                                                     */
+/* -------------------------------------------------------------------------- */
 
 export interface Vec3 {
-  x: number;
-  y: number;
-  z: number;
-}
-
-export interface TwoBoneIK2DResult {
-  rootRotation: number;
-  midRotation: number;
-  reachable: boolean;
-  targetDistance: number;
-  clampedDistance: number;
-}
-
-export interface TwoBoneIK3DResult {
-  rootDirection: Vec3;
-  midPosition: Vec3;
-  endPosition: Vec3;
-  reachable: boolean;
-  targetDistance: number;
-  clampedDistance: number;
-}
-
-export interface RigValidationResult {
-  valid: boolean;
-  errors: string[];
+  readonly x: number;
+  readonly y: number;
+  readonly z: number;
 }
 
 /* -------------------------------------------------------------------------- */
-/* Constants                                                                  */
+/* Quaternion                                                                 */
 /* -------------------------------------------------------------------------- */
 
-export const HUMANOID_RIG_ID_2D =
-  "00000000-0000-4000-8000-000000000100";
-
-export const HUMANOID_RIG_ID_3D =
-  "00000000-0000-4000-8000-000000000101";
+export interface Quaternion {
+  readonly x: number;
+  readonly y: number;
+  readonly z: number;
+  readonly w: number;
+}
 
 /* -------------------------------------------------------------------------- */
-/* Math Helpers                                                               */
+/* Transform                                                                  */
 /* -------------------------------------------------------------------------- */
 
-function clamp(
-  value: number,
-  min: number,
-  max: number,
+export interface RigTransform {
+  readonly position: Vec3;
+  readonly rotation: Quaternion;
+  readonly scale: Vec3;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Matrix                                                                     */
+/* -------------------------------------------------------------------------- */
+
+export type Matrix4 = readonly [
+  number, number, number, number,
+  number, number, number, number,
+  number, number, number, number,
+  number, number, number, number,
+];
+
+/* -------------------------------------------------------------------------- */
+/* Joint Limits                                                               */
+/* -------------------------------------------------------------------------- */
+
+export interface JointLimits {
+  readonly minRotation?: Vec3;
+  readonly maxRotation?: Vec3;
+  readonly minTranslation?: Vec3;
+  readonly maxTranslation?: Vec3;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Joint Constraint                                                           */
+/* -------------------------------------------------------------------------- */
+
+export interface JointConstraint {
+  readonly constraintId: string;
+  readonly type: ConstraintType;
+  readonly enabled: boolean;
+  readonly weight: number;
+  readonly limits?: JointLimits;
+  readonly metadata: Readonly<Record<string, unknown>>;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Joint                                                                      */
+/* -------------------------------------------------------------------------- */
+
+export interface RigJoint {
+  readonly jointId: string;
+  readonly name: string;
+  readonly type: JointType;
+  readonly parentJointId?: string;
+  readonly children: readonly string[];
+
+  readonly localTransform: RigTransform;
+  readonly bindTransform: RigTransform;
+  readonly inverseBindMatrix: Matrix4;
+
+  readonly length: number;
+
+  readonly constraints: readonly JointConstraint[];
+
+  readonly metadata: Readonly<Record<string, unknown>>;
+}
+
+/* -------------------------------------------------------------------------- */
+/* IK Chain                                                                   */
+/* -------------------------------------------------------------------------- */
+
+export interface IKChain {
+  readonly chainId: string;
+  readonly name: string;
+  readonly type: IKChainType;
+
+  readonly rootJointId: string;
+  readonly endJointId: string;
+  readonly targetJointId?: string;
+
+  readonly joints: readonly string[];
+
+  readonly iterations: number;
+  readonly tolerance: number;
+
+  readonly enabled: boolean;
+
+  readonly metadata: Readonly<Record<string, unknown>>;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Rig                                                                        */
+/* -------------------------------------------------------------------------- */
+
+export interface CharacterRig {
+  readonly rigId: string;
+  readonly schemaVersion: string;
+  readonly characterAssemblyId: string;
+  readonly representation: RigRepresentation;
+
+  readonly rootJointId: string;
+  readonly joints: readonly RigJoint[];
+
+  readonly ikChains: readonly IKChain[];
+
+  readonly metadata: Readonly<Record<string, unknown>>;
+
+  readonly createdBy: string;
+
+  readonly contentHash: string;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Inputs                                                                     */
+/* -------------------------------------------------------------------------- */
+
+export interface RigJointInput {
+  readonly jointId?: string;
+  readonly name: string;
+  readonly type: JointType;
+  readonly parentJointId?: string;
+
+  readonly localTransform?: Partial<RigTransform>;
+  readonly bindTransform?: Partial<RigTransform>;
+
+  readonly inverseBindMatrix?: Matrix4;
+
+  readonly length?: number;
+
+  readonly constraints?: readonly JointConstraint[];
+
+  readonly metadata?: Readonly<Record<string, unknown>>;
+}
+
+export interface IKChainInput {
+  readonly chainId?: string;
+  readonly name: string;
+  readonly type: IKChainType;
+
+  readonly rootJointId: string;
+  readonly endJointId: string;
+  readonly targetJointId?: string;
+
+  readonly joints?: readonly string[];
+
+  readonly iterations?: number;
+  readonly tolerance?: number;
+
+  readonly enabled?: boolean;
+
+  readonly metadata?: Readonly<Record<string, unknown>>;
+}
+
+export interface CharacterRigInput {
+  readonly rigId?: string;
+  readonly characterAssemblyId: string;
+  readonly representation: RigRepresentation;
+
+  readonly rootJointId?: string;
+
+  readonly joints: readonly RigJointInput[];
+
+  readonly ikChains?: readonly IKChainInput[];
+
+  readonly metadata?: Readonly<Record<string, unknown>>;
+
+  readonly createdBy?: string;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Defaults                                                                   */
+/* -------------------------------------------------------------------------- */
+
+const DEFAULT_POSITION: Vec3 = Object.freeze({
+  x: 0,
+  y: 0,
+  z: 0,
+});
+
+const DEFAULT_ROTATION: Quaternion =
+  Object.freeze({
+    x: 0,
+    y: 0,
+    z: 0,
+    w: 1,
+  });
+
+const DEFAULT_SCALE: Vec3 = Object.freeze({
+  x: 1,
+  y: 1,
+  z: 1,
+});
+
+const IDENTITY_MATRIX: Matrix4 = Object.freeze([
+  1, 0, 0, 0,
+  0, 1, 0, 0,
+  0, 0, 1, 0,
+  0, 0, 0, 1,
+]);
+
+/* -------------------------------------------------------------------------- */
+/* Canonical Joint Ordering                                                   */
+/* -------------------------------------------------------------------------- */
+
+/*
+ * This is the canonical anatomical ordering used by the rig engine.
+ *
+ * It is deliberately NOT based on:
+ *   - UUID
+ *   - object insertion order
+ *   - localeCompare()
+ *
+ * The ordering is stable across serialization, database retrieval and
+ * different input ordering.
+ *
+ * This also gives a natural character hierarchy:
+ *
+ * root
+ *   hip
+ *   spine
+ *     chest
+ *       neck
+ *         shoulder
+ *           upper-arm
+ *             lower-arm
+ *               hand
+ *                 finger
+ *         head
+ *     upper-leg
+ *       lower-leg
+ *         foot
+ *           toe
+ */
+const JOINT_TYPE_ORDER: Readonly<
+  Record<JointType, number>
+> = Object.freeze({
+  root: 0,
+  hip: 10,
+  spine: 20,
+  chest: 30,
+  neck: 40,
+  shoulder: 50,
+  "upper-arm": 60,
+  "lower-arm": 70,
+  hand: 80,
+  finger: 90,
+  head: 100,
+  "upper-leg": 110,
+  "lower-leg": 120,
+  foot: 130,
+  toe: 140,
+  custom: 1000,
+});
+
+function compareJoints(
+  a: RigJoint,
+  b: RigJoint,
 ): number {
-  return Math.min(
-    max,
-    Math.max(min, value),
-  );
-}
+  const typeOrderA =
+    JOINT_TYPE_ORDER[a.type] ?? 1000;
 
-function distance2D(
-  a: Vec2,
-  b: Vec2,
-): number {
-  return Math.hypot(
-    b.x - a.x,
-    b.y - a.y,
-  );
-}
+  const typeOrderB =
+    JOINT_TYPE_ORDER[b.type] ?? 1000;
 
-function distance3D(
-  a: Vec3,
-  b: Vec3,
-): number {
-  return Math.hypot(
-    b.x - a.x,
-    b.y - a.y,
-    b.z - a.z,
-  );
-}
-
-function normalize3D(
-  value: Vec3,
-): Vec3 {
-  const length = Math.hypot(
-    value.x,
-    value.y,
-    value.z,
-  );
-
-  if (length <= Number.EPSILON) {
-    return {
-      x: 1,
-      y: 0,
-      z: 0,
-    };
+  if (
+    typeOrderA !==
+    typeOrderB
+  ) {
+    return (
+      typeOrderA -
+      typeOrderB
+    );
   }
 
-  return {
-    x: value.x / length,
-    y: value.y / length,
-    z: value.z / length,
-  };
+  const nameCompare =
+    a.name.localeCompare(
+      b.name,
+    );
+
+  if (
+    nameCompare !== 0
+  ) {
+    return nameCompare;
+  }
+
+  return a.jointId.localeCompare(
+    b.jointId,
+  );
 }
 
-function add3D(
-  a: Vec3,
-  b: Vec3,
-): Vec3 {
-  return {
-    x: a.x + b.x,
-    y: a.y + b.y,
-    z: a.z + b.z,
-  };
-}
-
-function scale3D(
-  value: Vec3,
-  scalar: number,
-): Vec3 {
-  return {
-    x: value.x * scalar,
-    y: value.y * scalar,
-    z: value.z * scalar,
-  };
+function sortJoints(
+  joints: readonly RigJoint[],
+): RigJoint[] {
+  return [
+    ...joints,
+  ].sort(
+    compareJoints,
+  );
 }
 
 /* -------------------------------------------------------------------------- */
-/* Deterministic Identity                                                     */
+/* Helpers                                                                    */
 /* -------------------------------------------------------------------------- */
 
-function deterministicUuid(
-  value: string,
-): string {
-  const digest = createHash("sha256")
-    .update(value)
-    .digest("hex");
-
-  const hex = digest.slice(0, 32);
-
-  const versioned =
-    `${hex.slice(0, 8)}-` +
-    `${hex.slice(8, 12)}-` +
-    `5${hex.slice(13, 16)}-` +
-    `${(
-      (parseInt(hex.slice(16, 18), 16) & 0x3f) |
-      0x80
-    )
-      .toString(16)
-      .padStart(2, "0")}${hex.slice(18, 20)}-` +
-    `${hex.slice(20, 32)}`;
-
-  return versioned;
+function clone<T>(value: T): T {
+  return structuredClone(value);
 }
 
-function canonicalize(
+function requiredString(
   value: unknown,
+  field: string,
 ): string {
   if (
-    value === null ||
-    typeof value !== "object"
+    typeof value !== "string" ||
+    value.trim().length === 0
   ) {
-    return JSON.stringify(value);
+    throw new CaeError(
+      "INVALID_REQUEST",
+      `${field} must be a non-empty string.`,
+    );
   }
 
-  if (Array.isArray(value)) {
-    return `[${value
-      .map(canonicalize)
-      .join(",")}]`;
+  return value.trim();
+}
+
+function finite(
+  value: unknown,
+  field: string,
+): number {
+  if (
+    typeof value !== "number" ||
+    !Number.isFinite(value)
+  ) {
+    throw new CaeError(
+      "INVALID_REQUEST",
+      `${field} must be a finite number.`,
+    );
   }
 
-  const object =
-    value as Record<string, unknown>;
-
-  return `{${Object.keys(object)
-    .sort()
-    .map(
-      (key) =>
-        `${JSON.stringify(key)}:${canonicalize(
-          object[key],
-        )}`,
-    )
-    .join(",")}}`;
+  return value;
 }
 
-/* -------------------------------------------------------------------------- */
-/* Humanoid Skeleton                                                          */
-/* -------------------------------------------------------------------------- */
-
-function createHumanoidJoints(
-  dimension: RigDimension,
-): RigJoint[] {
-  const z =
-    dimension === "3d"
-      ? 0
-      : 0;
-
-  return [
-    {
-      id: "root",
-      parentId: null,
-      rest: {
-        x: 0,
-        y: 0,
-        z,
-      },
-    },
-
-    {
-      id: "pelvis",
-      parentId: "root",
-      rest: {
-        x: 0,
-        y: 1,
-        z,
-      },
-    },
-
-    {
-      id: "spine",
-      parentId: "pelvis",
-      rest: {
-        x: 0,
-        y: 1.5,
-        z,
-      },
-    },
-
-    {
-      id: "chest",
-      parentId: "spine",
-      rest: {
-        x: 0,
-        y: 2,
-        z,
-      },
-    },
-
-    {
-      id: "neck",
-      parentId: "chest",
-      rest: {
-        x: 0,
-        y: 2.7,
-        z,
-      },
-    },
-
-    {
-      id: "head",
-      parentId: "neck",
-      rest: {
-        x: 0,
-        y: 3,
-        z,
-      },
-    },
-
-    /* ------------------------------ Left Arm ----------------------------- */
-
-    {
-      id: "upper_arm.L",
-      parentId: "chest",
-      rest: {
-        x: -0.65,
-        y: 2.55,
-        z,
-      },
-    },
-
-    {
-      id: "lower_arm.L",
-      parentId: "upper_arm.L",
-      rest: {
-        x: -1.25,
-        y: 2.2,
-        z,
-      },
-    },
-
-    {
-      id: "hand.L",
-      parentId: "lower_arm.L",
-      rest: {
-        x: -1.8,
-        y: 1.85,
-        z,
-      },
-    },
-
-    /* ----------------------------- Right Arm ----------------------------- */
-
-    {
-      id: "upper_arm.R",
-      parentId: "chest",
-      rest: {
-        x: 0.65,
-        y: 2.55,
-        z,
-      },
-    },
-
-    {
-      id: "lower_arm.R",
-      parentId: "upper_arm.R",
-      rest: {
-        x: 1.25,
-        y: 2.2,
-        z,
-      },
-    },
-
-    {
-      id: "hand.R",
-      parentId: "lower_arm.R",
-      rest: {
-        x: 1.8,
-        y: 1.85,
-        z,
-      },
-    },
-
-    /* ------------------------------ Left Leg ----------------------------- */
-
-    {
-      id: "upper_leg.L",
-      parentId: "pelvis",
-      rest: {
-        x: -0.35,
-        y: 0.8,
-        z,
-      },
-    },
-
-    {
-      id: "lower_leg.L",
-      parentId: "upper_leg.L",
-      rest: {
-        x: -0.35,
-        y: 0.05,
-        z,
-      },
-    },
-
-    {
-      id: "foot.L",
-      parentId: "lower_leg.L",
-      rest: {
-        x: -0.35,
-        y: -0.7,
-        z,
-      },
-    },
-
-    /* ----------------------------- Right Leg ----------------------------- */
-
-    {
-      id: "upper_leg.R",
-      parentId: "pelvis",
-      rest: {
-        x: 0.35,
-        y: 0.8,
-        z,
-      },
-    },
-
-    {
-      id: "lower_leg.R",
-      parentId: "upper_leg.R",
-      rest: {
-        x: 0.35,
-        y: 0.05,
-        z,
-      },
-    },
-
-    {
-      id: "foot.R",
-      parentId: "lower_leg.R",
-      rest: {
-        x: 0.35,
-        y: -0.7,
-        z,
-      },
-    },
-  ];
-}
-
-/* -------------------------------------------------------------------------- */
-/* Humanoid Controls                                                          */
-/* -------------------------------------------------------------------------- */
-
-function createHumanoidControls(): RigControl[] {
-  return [
-    {
-      id: "root-control",
-      kind: "root",
-      targetIds: ["root"],
-    },
-
-    {
-      id: "pelvis-control",
-      kind: "position",
-      targetIds: ["pelvis"],
-    },
-
-    {
-      id: "spine-control",
-      kind: "spine",
-      targetIds: [
-        "pelvis",
-        "spine",
-        "chest",
-      ],
-    },
-
-    {
-      id: "head-control",
-      kind: "head",
-      targetIds: ["head"],
-    },
-
-    {
-      id: "hand.L-control",
-      kind: "hand",
-      targetIds: ["hand.L"],
-    },
-
-    {
-      id: "hand.R-control",
-      kind: "hand",
-      targetIds: ["hand.R"],
-    },
-
-    {
-      id: "foot.L-control",
-      kind: "foot",
-      targetIds: ["foot.L"],
-    },
-
-    {
-      id: "foot.R-control",
-      kind: "foot",
-      targetIds: ["foot.R"],
-    },
-
-    {
-      id: "hand.L-ik",
-      kind: "ik",
-      targetIds: [
-        "upper_arm.L",
-        "lower_arm.L",
-        "hand.L",
-      ],
-    },
-
-    {
-      id: "hand.R-ik",
-      kind: "ik",
-      targetIds: [
-        "upper_arm.R",
-        "lower_arm.R",
-        "hand.R",
-      ],
-    },
-
-    {
-      id: "foot.L-ik",
-      kind: "ik",
-      targetIds: [
-        "upper_leg.L",
-        "lower_leg.L",
-        "foot.L",
-      ],
-    },
-
-    {
-      id: "foot.R-ik",
-      kind: "ik",
-      targetIds: [
-        "upper_leg.R",
-        "lower_leg.R",
-        "foot.R",
-      ],
-    },
-  ];
-}
-
-/* -------------------------------------------------------------------------- */
-/* Constraints                                                                */
-/* -------------------------------------------------------------------------- */
-
-function createHumanoidConstraints(): Record<
-  string,
-  unknown
->[] {
-  const constraints: Record<
-    string,
-    unknown
-  >[] = [];
-
-  const limitedJoints = [
-    "neck",
-    "head",
-    "upper_arm.L",
-    "lower_arm.L",
-    "upper_arm.R",
-    "lower_arm.R",
-    "upper_leg.L",
-    "lower_leg.L",
-    "upper_leg.R",
-    "lower_leg.R",
-  ];
-
-  for (const jointId of limitedJoints) {
-    constraints.push({
-      type: "limit_rotation",
-      jointId,
-
-      min: {
-        x: -Math.PI,
-        y: -Math.PI,
-        z: -Math.PI,
-      },
-
-      max: {
-        x: Math.PI,
-        y: Math.PI,
-        z: Math.PI,
-      },
-    });
-  }
-
-  constraints.push(
-    {
-      type: "two_bone_ik",
-      rootJointId: "upper_arm.L",
-      midJointId: "lower_arm.L",
-      endJointId: "hand.L",
-      targetControlId: "hand.L-ik",
-    },
-
-    {
-      type: "two_bone_ik",
-      rootJointId: "upper_arm.R",
-      midJointId: "lower_arm.R",
-      endJointId: "hand.R",
-      targetControlId: "hand.R-ik",
-    },
-
-    {
-      type: "two_bone_ik",
-      rootJointId: "upper_leg.L",
-      midJointId: "lower_leg.L",
-      endJointId: "foot.L",
-      targetControlId: "foot.L-ik",
-    },
-
-    {
-      type: "two_bone_ik",
-      rootJointId: "upper_leg.R",
-      midJointId: "lower_leg.R",
-      endJointId: "foot.R",
-      targetControlId: "foot.R-ik",
-    },
+function positive(
+  value: number,
+  field: string,
+): number {
+  finite(
+    value,
+    field,
   );
 
-  return constraints;
+  if (
+    value <= 0
+  ) {
+    throw new CaeError(
+      "INVALID_REQUEST",
+      `${field} must be greater than zero.`,
+    );
+  }
+
+  return value;
+}
+
+function nonNegative(
+  value: number,
+  field: string,
+): number {
+  finite(
+    value,
+    field,
+  );
+
+  if (
+    value < 0
+  ) {
+    throw new CaeError(
+      "INVALID_REQUEST",
+      `${field} must not be negative.`,
+    );
+  }
+
+  return value;
 }
 
 /* -------------------------------------------------------------------------- */
-/* Rig Engine                                                                 */
+/* Vector Helpers                                                             */
 /* -------------------------------------------------------------------------- */
 
-export class RigEngine {
-  createHumanoid(
-    dimension: RigDimension = "2d",
-  ): RigDefinition {
-    const joints =
-      createHumanoidJoints(dimension);
+function vector(
+  input?: Partial<Vec3>,
+  fallback: Vec3 = DEFAULT_POSITION,
+): Vec3 {
+  const result: Vec3 = {
+    x:
+      input?.x ??
+      fallback.x,
 
-    const controls =
-      createHumanoidControls();
+    y:
+      input?.y ??
+      fallback.y,
 
-    const constraints =
-      createHumanoidConstraints();
+    z:
+      input?.z ??
+      fallback.z,
+  };
 
-    const rig: RigDefinition = {
-      id:
-        dimension === "2d"
-          ? HUMANOID_RIG_ID_2D
-          : HUMANOID_RIG_ID_3D,
+  finite(
+    result.x,
+    "vector.x",
+  );
 
-      name: `Humanoid ${dimension.toUpperCase()}`,
+  finite(
+    result.y,
+    "vector.y",
+  );
 
-      dimension,
+  finite(
+    result.z,
+    "vector.z",
+  );
 
-      joints,
+  return result;
+}
 
-      controls,
+/* -------------------------------------------------------------------------- */
+/* Quaternion Helpers                                                         */
+/* -------------------------------------------------------------------------- */
 
-      constraints,
-    };
+function quaternion(
+  input?: Partial<Quaternion>,
+): Quaternion {
+  const result: Quaternion = {
+    x:
+      input?.x ??
+      DEFAULT_ROTATION.x,
 
-    return this.validate(rig);
+    y:
+      input?.y ??
+      DEFAULT_ROTATION.y,
+
+    z:
+      input?.z ??
+      DEFAULT_ROTATION.z,
+
+    w:
+      input?.w ??
+      DEFAULT_ROTATION.w,
+  };
+
+  finite(
+    result.x,
+    "rotation.x",
+  );
+
+  finite(
+    result.y,
+    "rotation.y",
+  );
+
+  finite(
+    result.z,
+    "rotation.z",
+  );
+
+  finite(
+    result.w,
+    "rotation.w",
+  );
+
+  const length =
+    Math.sqrt(
+      result.x * result.x +
+      result.y * result.y +
+      result.z * result.z +
+      result.w * result.w,
+    );
+
+  if (
+    length === 0
+  ) {
+    throw new CaeError(
+      "INVALID_REQUEST",
+      "Quaternion cannot have zero length.",
+    );
   }
 
-  validate(
-    rig: RigDefinition,
-  ): RigDefinition {
-    const result =
-      this.validateRig(rig);
+  return {
+    x:
+      result.x /
+      length,
 
-    if (!result.valid) {
-      throw new Error(
-        `Invalid rig: ${result.errors.join("; ")}`,
-      );
-    }
+    y:
+      result.y /
+      length,
 
-    return structuredClone(rig);
+    z:
+      result.z /
+      length,
+
+    w:
+      result.w /
+      length,
+  };
+}
+
+/* -------------------------------------------------------------------------- */
+/* Transform Creation                                                         */
+/* -------------------------------------------------------------------------- */
+
+function createTransform(
+  input?: Partial<RigTransform>,
+): RigTransform {
+  const position =
+    vector(
+      input?.position,
+      DEFAULT_POSITION,
+    );
+
+  const rotation =
+    quaternion(
+      input?.rotation,
+    );
+
+  const scale =
+    vector(
+      input?.scale,
+      DEFAULT_SCALE,
+    );
+
+  if (
+    scale.x === 0 ||
+    scale.y === 0 ||
+    scale.z === 0
+  ) {
+    throw new CaeError(
+      "INVALID_REQUEST",
+      "Transform scale components cannot be zero.",
+    );
   }
 
-  validateRig(
-    rig: RigDefinition,
-  ): RigValidationResult {
-    const errors: string[] = [];
+  return {
+    position,
+    rotation,
+    scale,
+  };
+}
 
-    const parsed =
-      RigDefinitionSchema.safeParse(rig);
+/* -------------------------------------------------------------------------- */
+/* Matrix Validation                                                          */
+/* -------------------------------------------------------------------------- */
 
-    if (!parsed.success) {
-      errors.push(
-        ...parsed.error.issues.map(
-          (issue) =>
-            `${issue.path.join(".")}: ${issue.message}`,
-        ),
-      );
+function matrix(
+  value?: Matrix4,
+): Matrix4 {
+  const result =
+    value ??
+    IDENTITY_MATRIX;
 
-      return {
-        valid: false,
-        errors,
-      };
-    }
+  if (
+    !Array.isArray(result) ||
+    result.length !== 16
+  ) {
+    throw new CaeError(
+      "INVALID_REQUEST",
+      "Matrix4 must contain exactly 16 numbers.",
+    );
+  }
 
-    const jointIds = new Set<string>();
+  for (
+    let index = 0;
+    index < 16;
+    index += 1
+  ) {
+    finite(
+      result[index],
+      `matrix[${index}]`,
+    );
+  }
 
-    for (const joint of rig.joints) {
-      if (jointIds.has(joint.id)) {
-        errors.push(
-          `Duplicate joint id: ${joint.id}`,
-        );
-      }
+  return [
+    ...result,
+  ] as unknown as Matrix4;
+}
 
-      jointIds.add(joint.id);
-    }
+/* -------------------------------------------------------------------------- */
+/* Joint Creation                                                             */
+/* -------------------------------------------------------------------------- */
+
+export function createRigJoint(
+  input: RigJointInput,
+): RigJoint {
+  const jointId =
+    input.jointId ??
+    uuid();
+
+  const name =
+    requiredString(
+      input.name,
+      "joint.name",
+    );
+
+  const parentJointId =
+    input.parentJointId !==
+    undefined
+      ? requiredString(
+          input.parentJointId,
+          "joint.parentJointId",
+        )
+      : undefined;
+
+  const length =
+    input.length ??
+    1;
+
+  nonNegative(
+    length,
+    "joint.length",
+  );
+
+  const constraints =
+    input.constraints ??
+    [];
+
+  return {
+    jointId,
+
+    name,
+
+    type:
+      input.type,
+
+    ...(parentJointId
+      ? {
+          parentJointId,
+        }
+      : {}),
+
+    children: [],
+
+    localTransform:
+      createTransform(
+        input.localTransform,
+      ),
+
+    bindTransform:
+      createTransform(
+        input.bindTransform,
+      ),
+
+    inverseBindMatrix:
+      matrix(
+        input.inverseBindMatrix,
+      ),
+
+    length,
+
+    constraints:
+      clone(
+        constraints,
+      ),
+
+    metadata:
+      clone(
+        input.metadata ??
+          {},
+      ),
+  };
+}
+
+/* -------------------------------------------------------------------------- */
+/* Constraint Validation                                                      */
+/* -------------------------------------------------------------------------- */
+
+function validateConstraints(
+  joint: RigJoint,
+): void {
+  const ids =
+    joint.constraints.map(
+      (
+        constraint,
+      ) =>
+        constraint.constraintId,
+    );
+
+  if (
+    new Set(ids).size !==
+    ids.length
+  ) {
+    throw new CaeError(
+      "ENTITY_DUPLICATE",
+      `Joint "${joint.jointId}" contains duplicate constraint IDs.`,
+    );
+  }
+
+  for (
+    const constraint of
+      joint.constraints
+  ) {
+    requiredString(
+      constraint.constraintId,
+      "constraint.constraintId",
+    );
+
+    finite(
+      constraint.weight,
+      "constraint.weight",
+    );
 
     if (
-      rig.joints.length === 0
+      constraint.weight < 0 ||
+      constraint.weight > 1
     ) {
-      errors.push(
-        "Rig must contain at least one joint.",
+      throw new CaeError(
+        "INVALID_REQUEST",
+        "Constraint weight must be between 0 and 1.",
+      );
+    }
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Hierarchy Validation                                                       */
+/* -------------------------------------------------------------------------- */
+
+function validateHierarchy(
+  joints: readonly RigJoint[],
+): void {
+  const byId =
+    new Map(
+      joints.map(
+        (
+          joint,
+        ) => [
+          joint.jointId,
+          joint,
+        ],
+      ),
+    );
+
+  for (
+    const joint of joints
+  ) {
+    if (
+      joint.parentJointId ===
+      joint.jointId
+    ) {
+      throw new CaeError(
+        "COMMAND_INVALID",
+        `Joint "${joint.jointId}" cannot parent itself.`,
+        [joint.jointId],
       );
     }
 
     if (
-      rig.joints.length > 0 &&
-      !rig.joints.some(
-        (joint) =>
-          joint.parentId === null,
+      joint.parentJointId &&
+      !byId.has(
+        joint.parentJointId,
       )
     ) {
-      errors.push(
-        "Rig must contain a root joint.",
+      throw new CaeError(
+        "ENTITY_NOT_FOUND",
+        `Parent joint "${joint.parentJointId}" was not found.`,
+        [
+          joint.parentJointId,
+        ],
       );
     }
 
-    for (const joint of rig.joints) {
+    validateConstraints(
+      joint,
+    );
+  }
+
+  for (
+    const joint of joints
+  ) {
+    const visited =
+      new Set<string>();
+
+    let current:
+      | RigJoint
+      | undefined =
+      joint;
+
+    while (
+      current?.parentJointId
+    ) {
       if (
-        joint.parentId !== null &&
-        !jointIds.has(joint.parentId)
+        visited.has(
+          current.jointId,
+        )
       ) {
-        errors.push(
-          `Joint ${joint.id} references missing parent ${joint.parentId}.`,
+        throw new CaeError(
+          "COMMAND_INVALID",
+          "Rig contains a cyclic joint hierarchy.",
+          [current.jointId],
+        );
+      }
+
+      visited.add(
+        current.jointId,
+      );
+
+      current =
+        byId.get(
+          current.parentJointId,
+        );
+
+      if (!current) {
+        break;
+      }
+    }
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Children Reconstruction                                                    */
+/* -------------------------------------------------------------------------- */
+
+function rebuildChildren(
+  joints: readonly RigJoint[],
+): RigJoint[] {
+  const children =
+    new Map<
+      string,
+      RigJoint[]
+    >();
+
+  for (
+    const joint of joints
+  ) {
+    children.set(
+      joint.jointId,
+      [],
+    );
+  }
+
+  for (
+    const joint of joints
+  ) {
+    if (
+      joint.parentJointId
+    ) {
+      const list =
+        children.get(
+          joint.parentJointId,
+        );
+
+      if (list) {
+        list.push(
+          joint,
         );
       }
     }
+  }
 
-    /* ----------------------------- Cycle Check -------------------------- */
+  return joints.map(
+    (
+      joint,
+    ) => ({
+      ...joint,
 
-    const jointMap =
-      new Map<
-        string,
-        RigDefinition["joints"][number]
-      >(
+      children:
+        (
+          children.get(
+            joint.jointId,
+          ) ?? []
+        )
+          .sort(
+            compareJoints,
+          )
+          .map(
+            (
+              child,
+            ) =>
+              child.jointId,
+          ),
+    }),
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* Joint Hierarchy Order                                                       */
+/* -------------------------------------------------------------------------- */
+
+export function topologicalJointOrder(
+  joints: readonly RigJoint[],
+): RigJoint[] {
+  const byId =
+    new Map(
+      joints.map(
+        (
+          joint,
+        ) => [
+          joint.jointId,
+          joint,
+        ],
+      ),
+    );
+
+  const result: RigJoint[] =
+    [];
+
+  const visiting =
+    new Set<string>();
+
+  const visited =
+    new Set<string>();
+
+  function visit(
+    jointId: string,
+  ): void {
+    if (
+      visited.has(
+        jointId,
+      )
+    ) {
+      return;
+    }
+
+    if (
+      visiting.has(
+        jointId,
+      )
+    ) {
+      throw new CaeError(
+        "COMMAND_INVALID",
+        "Rig contains a cyclic joint hierarchy.",
+      );
+    }
+
+    const joint =
+      byId.get(
+        jointId,
+      );
+
+    if (!joint) {
+      throw new CaeError(
+        "ENTITY_NOT_FOUND",
+        `Joint "${jointId}" was not found.`,
+        [jointId],
+      );
+    }
+
+    visiting.add(
+      jointId,
+    );
+
+    if (
+      joint.parentJointId
+    ) {
+      visit(
+        joint.parentJointId,
+      );
+    }
+
+    visiting.delete(
+      jointId,
+    );
+
+    visited.add(
+      jointId,
+    );
+
+    result.push(
+      joint,
+    );
+  }
+
+  /*
+   * First process actual roots in canonical
+   * anatomical order.
+   */
+  const roots =
+    sortJoints(
+      joints.filter(
+        (
+          joint,
+        ) =>
+          !joint.parentJointId,
+      ),
+    );
+
+  for (
+    const root of roots
+  ) {
+    visit(
+      root.jointId,
+    );
+  }
+
+  /*
+   * Then process any remaining joints.
+   * This is mainly defensive and also keeps
+   * the function deterministic for malformed
+   * or externally constructed graphs.
+   */
+  const remaining =
+    sortJoints(
+      joints.filter(
+        (
+          joint,
+        ) =>
+          !visited.has(
+            joint.jointId,
+          ),
+      ),
+    );
+
+  for (
+    const joint of remaining
+  ) {
+    visit(
+      joint.jointId,
+    );
+  }
+
+  return result;
+}
+
+/* -------------------------------------------------------------------------- */
+/* IK Chain Creation                                                          */
+/* -------------------------------------------------------------------------- */
+
+function createIKChain(
+  input: IKChainInput,
+): IKChain {
+  const chainId =
+    input.chainId ??
+    uuid();
+
+  const rootJointId =
+    requiredString(
+      input.rootJointId,
+      "ik.rootJointId",
+    );
+
+  const endJointId =
+    requiredString(
+      input.endJointId,
+      "ik.endJointId",
+    );
+
+  const iterations =
+    input.iterations ??
+    12;
+
+  const tolerance =
+    input.tolerance ??
+    0.001;
+
+  if (
+    !Number.isInteger(
+      iterations,
+    ) ||
+    iterations <= 0
+  ) {
+    throw new CaeError(
+      "INVALID_REQUEST",
+      "IK iterations must be a positive integer.",
+    );
+  }
+
+  positive(
+    tolerance,
+    "ik.tolerance",
+  );
+
+  return {
+    chainId,
+
+    name:
+      requiredString(
+        input.name,
+        "ik.name",
+      ),
+
+    type:
+      input.type,
+
+    rootJointId,
+
+    endJointId,
+
+    ...(input.targetJointId
+      ? {
+          targetJointId:
+            requiredString(
+              input.targetJointId,
+              "ik.targetJointId",
+            ),
+        }
+      : {}),
+
+    joints:
+      input.joints
+        ? [
+            ...input.joints,
+          ]
+        : [],
+
+    iterations,
+
+    tolerance,
+
+    enabled:
+      input.enabled ??
+      true,
+
+    metadata:
+      clone(
+        input.metadata ??
+          {},
+      ),
+  };
+}
+
+/* -------------------------------------------------------------------------- */
+/* IK Validation                                                              */
+/* -------------------------------------------------------------------------- */
+
+function validateIKChains(
+  chains: readonly IKChain[],
+  joints: readonly RigJoint[],
+): void {
+  const jointIds =
+    new Set(
+      joints.map(
+        (
+          joint,
+        ) =>
+          joint.jointId,
+      ),
+    );
+
+  const chainIds =
+    chains.map(
+      (
+        chain,
+      ) =>
+        chain.chainId,
+    );
+
+  if (
+    new Set(chainIds).size !==
+    chainIds.length
+  ) {
+    throw new CaeError(
+      "ENTITY_DUPLICATE",
+      "Rig contains duplicate IK chain IDs.",
+    );
+  }
+
+  for (
+    const chain of chains
+  ) {
+    if (
+      !jointIds.has(
+        chain.rootJointId,
+      )
+    ) {
+      throw new CaeError(
+        "ENTITY_NOT_FOUND",
+        `IK root joint "${chain.rootJointId}" was not found.`,
+      );
+    }
+
+    if (
+      !jointIds.has(
+        chain.endJointId,
+      )
+    ) {
+      throw new CaeError(
+        "ENTITY_NOT_FOUND",
+        `IK end joint "${chain.endJointId}" was not found.`,
+      );
+    }
+
+    if (
+      chain.targetJointId &&
+      !jointIds.has(
+        chain.targetJointId,
+      )
+    ) {
+      throw new CaeError(
+        "ENTITY_NOT_FOUND",
+        `IK target joint "${chain.targetJointId}" was not found.`,
+      );
+    }
+
+    if (
+      chain.joints.length > 0
+    ) {
+      for (
+        const jointId of
+          chain.joints
+      ) {
+        if (
+          !jointIds.has(
+            jointId,
+          )
+        ) {
+          throw new CaeError(
+            "ENTITY_NOT_FOUND",
+            `IK chain joint "${jointId}" was not found.`,
+          );
+        }
+      }
+    }
+
+    if (
+      chain.rootJointId ===
+      chain.endJointId
+    ) {
+      throw new CaeError(
+        "COMMAND_INVALID",
+        "IK root and end joint cannot be identical.",
+      );
+    }
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Rig Fingerprint                                                            */
+/* -------------------------------------------------------------------------- */
+
+export function fingerprintRig(
+  rig: Omit<
+    CharacterRig,
+    "contentHash"
+  >,
+): string {
+  return canonicalHash({
+    rigId:
+      rig.rigId,
+
+    schemaVersion:
+      rig.schemaVersion,
+
+    characterAssemblyId:
+      rig.characterAssemblyId,
+
+    representation:
+      rig.representation,
+
+    rootJointId:
+      rig.rootJointId,
+
+    joints:
+      rig.joints,
+
+    ikChains:
+      rig.ikChains,
+
+    metadata:
+      rig.metadata,
+
+    createdBy:
+      rig.createdBy,
+  }) as string;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Rig Creation                                                               */
+/* -------------------------------------------------------------------------- */
+
+export function createCharacterRig(
+  input: CharacterRigInput,
+): CharacterRig {
+  const characterAssemblyId =
+    requiredString(
+      input.characterAssemblyId,
+      "characterAssemblyId",
+    );
+
+  const representation =
+    input.representation;
+
+  if (
+    representation !== "2d" &&
+    representation !== "3d" &&
+    representation !== "hybrid"
+  ) {
+    throw new CaeError(
+      "INVALID_REQUEST",
+      `Unsupported rig representation: ${String(
+        representation,
+      )}.`,
+    );
+  }
+
+  if (
+    !Array.isArray(
+      input.joints,
+    ) ||
+    input.joints.length ===
+      0
+  ) {
+    throw new CaeError(
+      "INVALID_REQUEST",
+      "Rig must contain at least one joint.",
+    );
+  }
+
+  const joints =
+    input.joints.map(
+      createRigJoint,
+    );
+
+  const jointIds =
+    joints.map(
+      (
+        joint,
+      ) =>
+        joint.jointId,
+    );
+
+  const duplicateIds =
+    jointIds.filter(
+      (
+        id,
+        index,
+      ) =>
+        jointIds.indexOf(id) !==
+        index,
+    );
+
+  if (
+    duplicateIds.length > 0
+  ) {
+    throw new CaeError(
+      "ENTITY_DUPLICATE",
+      "Rig contains duplicate joint IDs.",
+      [
+        ...new Set(
+          duplicateIds,
+        ),
+      ],
+    );
+  }
+
+  /*
+   * Self-parenting must be detected before
+   * root detection so the caller receives the
+   * real validation error.
+   */
+  for (
+    const joint of joints
+  ) {
+    if (
+      joint.parentJointId ===
+      joint.jointId
+    ) {
+      throw new CaeError(
+        "COMMAND_INVALID",
+        `Joint "${joint.jointId}" cannot parent itself.`,
+        [joint.jointId],
+      );
+    }
+  }
+
+  validateHierarchy(
+    joints,
+  );
+
+  const normalizedJoints =
+    rebuildChildren(
+      joints,
+    );
+
+  const rootCandidates =
+    normalizedJoints.filter(
+      (
+        joint,
+      ) =>
+        !joint.parentJointId,
+    );
+
+  if (
+    rootCandidates.length ===
+    0
+  ) {
+    throw new CaeError(
+      "COMMAND_INVALID",
+      "Rig must contain a root joint.",
+    );
+  }
+
+  if (
+    rootCandidates.length > 1 &&
+    !input.rootJointId
+  ) {
+    throw new CaeError(
+      "COMMAND_INVALID",
+      "Multiple root joints exist; rootJointId must be specified.",
+    );
+  }
+
+  const rootJointId =
+    input.rootJointId ??
+    rootCandidates[0].jointId;
+
+  const root =
+    normalizedJoints.find(
+      (
+        joint,
+      ) =>
+        joint.jointId ===
+        rootJointId,
+    );
+
+  if (!root) {
+    throw new CaeError(
+      "ENTITY_NOT_FOUND",
+      `Root joint "${rootJointId}" was not found.`,
+      [rootJointId],
+    );
+  }
+
+  if (
+    root.parentJointId
+  ) {
+    throw new CaeError(
+      "COMMAND_INVALID",
+      `Root joint "${rootJointId}" cannot have a parent.`,
+      [rootJointId],
+    );
+  }
+
+  const ikChains =
+    (
+      input.ikChains ??
+      []
+    ).map(
+      createIKChain,
+    );
+
+  validateIKChains(
+    ikChains,
+    normalizedJoints,
+  );
+
+  const rigId =
+    input.rigId ??
+    uuid();
+
+  const createdBy =
+    input.createdBy ??
+    "local";
+
+  const withoutHash:
+    Omit<
+      CharacterRig,
+      "contentHash"
+    > = {
+    rigId,
+
+    schemaVersion:
+      RIG_SCHEMA_VERSION,
+
+    characterAssemblyId,
+
+    representation,
+
+    rootJointId,
+
+    /*
+     * Canonical hierarchy order is generated
+     * independently of input ordering.
+     */
+    joints:
+      topologicalJointOrder(
+        normalizedJoints,
+      ),
+
+    ikChains: [
+      ...ikChains,
+    ].sort(
+      (
+        a,
+        b,
+      ) =>
+        a.chainId.localeCompare(
+          b.chainId,
+        ),
+    ),
+
+    metadata:
+      clone(
+        input.metadata ??
+          {},
+      ),
+
+    createdBy,
+  };
+
+  const contentHash =
+    fingerprintRig(
+      withoutHash,
+    );
+
+  return {
+    ...withoutHash,
+
+    contentHash,
+  };
+}
+
+/* -------------------------------------------------------------------------- */
+/* Rig Validation                                                             */
+/* -------------------------------------------------------------------------- */
+
+export function validateCharacterRig(
+  input: unknown,
+): CharacterRig {
+  if (
+    typeof input !==
+      "object" ||
+    input === null ||
+    Array.isArray(input)
+  ) {
+    throw new CaeError(
+      "INVALID_REQUEST",
+      "Character rig must be an object.",
+    );
+  }
+
+  const value =
+    input as Record<
+      string,
+      unknown
+    >;
+
+  const rig =
+    createCharacterRig({
+      rigId:
+        requiredString(
+          value.rigId,
+          "rigId",
+        ),
+
+      characterAssemblyId:
+        requiredString(
+          value.characterAssemblyId,
+          "characterAssemblyId",
+        ),
+
+      representation:
+        value.representation as RigRepresentation,
+
+      rootJointId:
+        requiredString(
+          value.rootJointId,
+          "rootJointId",
+        ),
+
+      joints:
+        value.joints as readonly RigJointInput[],
+
+      ikChains:
+        value.ikChains as
+          | readonly IKChainInput[]
+          | undefined,
+
+      metadata:
+        value.metadata as
+          | Readonly<
+              Record<string, unknown>
+            >
+          | undefined,
+
+      createdBy:
+        requiredString(
+          value.createdBy,
+          "createdBy",
+        ),
+    });
+
+  if (
+    rig.schemaVersion !==
+    value.schemaVersion
+  ) {
+    throw new CaeError(
+      "INVALID_REQUEST",
+      "Rig schemaVersion does not match.",
+    );
+  }
+
+  const contentHash =
+    requiredString(
+      value.contentHash,
+      "contentHash",
+    );
+
+  if (
+    contentHash !==
+    rig.contentHash
+  ) {
+    throw new CaeError(
+      "INVALID_REQUEST",
+      "Rig contentHash does not match its canonical fingerprint.",
+      [
+        {
+          expected:
+            rig.contentHash,
+
+          received:
+            contentHash,
+        },
+      ],
+    );
+  }
+
+  return clone(
+    rig,
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* Rig Catalog                                                                */
+/* -------------------------------------------------------------------------- */
+
+export class RigCatalog {
+  private readonly rigs =
+    new Map<
+      string,
+      CharacterRig
+    >();
+
+  register(
+    rig: CharacterRig,
+  ): CharacterRig {
+    const validated =
+      validateCharacterRig(
+        rig,
+      );
+
+    const existing =
+      this.rigs.get(
+        validated.rigId,
+      );
+
+    if (existing) {
+      if (
+        existing.contentHash ===
+        validated.contentHash
+      ) {
+        return clone(
+          existing,
+        );
+      }
+
+      throw new CaeError(
+        "ENTITY_DUPLICATE",
+        `Rig "${validated.rigId}" already exists with different content.`,
+        [validated.rigId],
+      );
+    }
+
+    this.rigs.set(
+      validated.rigId,
+      clone(
+        validated,
+      ),
+    );
+
+    return clone(
+      validated,
+    );
+  }
+
+  get(
+    rigId: string,
+  ):
+    | CharacterRig
+    | undefined {
+    const id =
+      requiredString(
+        rigId,
+        "rigId",
+      );
+
+    const rig =
+      this.rigs.get(
+        id,
+      );
+
+    return rig
+      ? clone(rig)
+      : undefined;
+  }
+
+  require(
+    rigId: string,
+  ): CharacterRig {
+    const rig =
+      this.get(
+        rigId,
+      );
+
+    if (!rig) {
+      throw new CaeError(
+        "ENTITY_NOT_FOUND",
+        `Rig "${rigId}" was not found.`,
+        [rigId],
+      );
+    }
+
+    return rig;
+  }
+
+  list(
+    characterAssemblyId?: string,
+  ): CharacterRig[] {
+    return clone(
+      [
+        ...this.rigs.values(),
+      ]
+        .filter(
+          (
+            rig,
+          ) =>
+            !characterAssemblyId ||
+            rig.characterAssemblyId ===
+              characterAssemblyId,
+        )
+        .sort(
+          (
+            a,
+            b,
+          ) =>
+            a.rigId.localeCompare(
+              b.rigId,
+            ),
+        ),
+    );
+  }
+
+  getJoint(
+    rigId: string,
+    jointId: string,
+  ):
+    | RigJoint
+    | undefined {
+    const rig =
+      this.get(
+        rigId,
+      );
+
+    if (!rig) {
+      return undefined;
+    }
+
+    return clone(
+      rig.joints.find(
+        (
+          joint,
+        ) =>
+          joint.jointId ===
+          jointId,
+      ),
+    );
+  }
+
+  requireJoint(
+    rigId: string,
+    jointId: string,
+  ): RigJoint {
+    const joint =
+      this.getJoint(
+        rigId,
+        jointId,
+      );
+
+    if (!joint) {
+      throw new CaeError(
+        "ENTITY_NOT_FOUND",
+        `Joint "${jointId}" was not found.`,
+        [jointId],
+      );
+    }
+
+    return joint;
+  }
+
+  children(
+    rigId: string,
+    jointId: string,
+  ): RigJoint[] {
+    const rig =
+      this.require(
+        rigId,
+      );
+
+    return clone(
+      sortJoints(
+        rig.joints.filter(
+          (
+            joint,
+          ) =>
+            joint.parentJointId ===
+            jointId,
+        ),
+      ),
+    );
+  }
+
+  descendants(
+    rigId: string,
+    jointId: string,
+  ): RigJoint[] {
+    const rig =
+      this.require(
+        rigId,
+      );
+
+    const byId =
+      new Map(
         rig.joints.map(
-          (joint) => [
-            joint.id,
+          (
+            joint,
+          ) => [
+            joint.jointId,
             joint,
           ],
         ),
       );
 
-    for (const joint of rig.joints) {
-      const visited =
-        new Set<string>();
+    const result: RigJoint[] =
+      [];
 
-      let current:
-        | string
-        | null = joint.id;
-
-      while (current !== null) {
-        if (visited.has(current)) {
-          errors.push(
-            `Joint hierarchy contains a cycle involving ${joint.id}.`,
+    const walk =
+      (
+        parentId: string,
+      ): void => {
+        const children =
+          sortJoints(
+            rig.joints.filter(
+              (
+                joint,
+              ) =>
+                joint.parentJointId ===
+                parentId,
+            ),
           );
-          break;
-        }
-
-        visited.add(current);
-
-        const currentJoint =
-          jointMap.get(current);
-
-        if (!currentJoint) {
-          break;
-        }
-
-        current =
-          currentJoint.parentId;
-      }
-    }
-
-    /* -------------------------- Control Check --------------------------- */
-
-    const controlIds =
-      new Set<string>();
-
-    for (const control of rig.controls) {
-      if (
-        controlIds.has(control.id)
-      ) {
-        errors.push(
-          `Duplicate control id: ${control.id}`,
-        );
-      }
-
-      controlIds.add(control.id);
-
-      for (const targetId of control.targetIds) {
-        if (
-          !jointIds.has(targetId)
-        ) {
-          errors.push(
-            `Control ${control.id} references missing joint ${targetId}.`,
-          );
-        }
-      }
-    }
-
-    /* ------------------------ Constraint Check -------------------------- */
-
-    for (
-      const constraint of rig.constraints
-    ) {
-      const record =
-        constraint as Record<
-          string,
-          unknown
-        >;
-
-      const type =
-        record.type;
-
-      if (
-        type === "two_bone_ik"
-      ) {
-        const required = [
-          "rootJointId",
-          "midJointId",
-          "endJointId",
-        ];
 
         for (
-          const key of required
+          const child of
+            children
         ) {
-          const jointId =
-            record[key];
+          result.push(
+            child,
+          );
 
-          if (
-            typeof jointId !==
-              "string" ||
-            !jointIds.has(
-              jointId,
-            )
-          ) {
-            errors.push(
-              `Two-bone IK references invalid ${key}.`,
-            );
-          }
-        }
-
-        const targetControlId =
-          record.targetControlId;
-
-        if (
-          typeof targetControlId ===
-            "string" &&
-          !controlIds.has(
-            targetControlId,
-          )
-        ) {
-          errors.push(
-            `Two-bone IK references missing target control ${targetControlId}.`,
+          walk(
+            child.jointId,
           );
         }
-      }
-
-      if (
-        type ===
-        "limit_rotation"
-      ) {
-        const jointId =
-          record.jointId;
-
-        if (
-          typeof jointId !==
-            "string" ||
-          !jointIds.has(jointId)
-        ) {
-          errors.push(
-            `Rotation limit references missing joint ${String(
-              jointId,
-            )}.`,
-          );
-        }
-      }
-    }
-
-    return {
-      valid:
-        errors.length === 0,
-      errors,
-    };
-  }
-
-  applyControl(
-    rig: RigDefinition,
-    controlId: string,
-    value: number,
-  ): RigDefinition {
-    if (
-      !Number.isFinite(value)
-    ) {
-      throw new Error(
-        "Control value must be finite.",
-      );
-    }
-
-    const control =
-      rig.controls.find(
-        (item) =>
-          item.id === controlId,
-      );
-
-    if (!control) {
-      throw new Error(
-        `Unknown rig control: ${controlId}`,
-      );
-    }
-
-    const normalizedValue =
-      clamp(
-        value,
-        -1,
-        1,
-      );
-
-    const next =
-      structuredClone(rig);
-
-    next.constraints = [
-      ...next.constraints,
-    ];
-
-    next.constraints.push({
-      type: "control_value",
-      controlId,
-      value: normalizedValue,
-    });
-
-    return this.validate(next);
-  }
-
-  solveTwoBoneIK2D(
-    root: Vec2,
-    mid: Vec2,
-    end: Vec2,
-    target: Vec2,
-  ): TwoBoneIK2DResult {
-    const len1 =
-      distance2D(
-        root,
-        mid,
-      );
-
-    const len2 =
-      distance2D(
-        mid,
-        end,
-      );
-
-    if (
-      len1 <= Number.EPSILON ||
-      len2 <= Number.EPSILON
-    ) {
-      throw new Error(
-        "Two-bone IK requires non-zero bone lengths.",
-      );
-    }
-
-    const targetDistance =
-      distance2D(
-        root,
-        target,
-      );
-
-    const minimumDistance =
-      Math.abs(
-        len1 - len2,
-      ) + 1e-8;
-
-    const maximumDistance =
-      len1 + len2 - 1e-8;
-
-    const clampedDistance =
-      clamp(
-        targetDistance,
-        minimumDistance,
-        maximumDistance,
-      );
-
-    const directionX =
-      target.x - root.x;
-
-    const directionY =
-      target.y - root.y;
-
-    const baseAngle =
-      Math.atan2(
-        directionY,
-        directionX,
-      );
-
-    const rootAngleOffset =
-      Math.acos(
-        clamp(
-          (
-            len1 *
-              len1 +
-            clampedDistance *
-              clampedDistance -
-            len2 *
-              len2
-          ) /
-            (
-              2 *
-              len1 *
-              clampedDistance
-            ),
-          -1,
-          1,
-        ),
-      );
-
-    const midAngle =
-      Math.acos(
-        clamp(
-          (
-            len1 *
-              len1 +
-            len2 *
-              len2 -
-            clampedDistance *
-              clampedDistance
-          ) /
-            (
-              2 *
-              len1 *
-              len2
-            ),
-          -1,
-          1,
-        ),
-      );
-
-    return {
-      rootRotation:
-        baseAngle -
-        rootAngleOffset,
-
-      midRotation:
-        Math.PI -
-        midAngle,
-
-      reachable:
-        targetDistance >=
-          minimumDistance &&
-        targetDistance <=
-          maximumDistance,
-
-      targetDistance,
-
-      clampedDistance,
-    };
-  }
-
-  solveTwoBoneIK3D(
-    root: Vec3,
-    mid: Vec3,
-    end: Vec3,
-    target: Vec3,
-  ): TwoBoneIK3DResult {
-    const len1 =
-      distance3D(
-        root,
-        mid,
-      );
-
-    const len2 =
-      distance3D(
-        mid,
-        end,
-      );
-
-    if (
-      len1 <= Number.EPSILON ||
-      len2 <= Number.EPSILON
-    ) {
-      throw new Error(
-        "Two-bone IK requires non-zero bone lengths.",
-      );
-    }
-
-    const targetVector = {
-      x: target.x - root.x,
-      y: target.y - root.y,
-      z: target.z - root.z,
-    };
-
-    const targetDistance =
-      Math.hypot(
-        targetVector.x,
-        targetVector.y,
-        targetVector.z,
-      );
-
-    const minimumDistance =
-      Math.abs(
-        len1 - len2,
-      ) + 1e-8;
-
-    const maximumDistance =
-      len1 + len2 - 1e-8;
-
-    const clampedDistance =
-      clamp(
-        targetDistance,
-        minimumDistance,
-        maximumDistance,
-      );
-
-    const direction =
-      normalize3D(
-        targetVector,
-      );
-
-    const midDistance =
-      (
-        len1 *
-          len1 +
-        clampedDistance *
-          clampedDistance -
-        len2 *
-          len2
-      ) /
-      (
-        2 *
-        clampedDistance
-      );
-
-    const heightSquared =
-      Math.max(
-        0,
-        len1 *
-          len1 -
-          midDistance *
-            midDistance,
-      );
-
-    const height =
-      Math.sqrt(
-        heightSquared,
-      );
-
-    /*
-     * A deterministic bend plane is selected from the
-     * current root->mid direction. This gives the solver
-     * stable behaviour without requiring a pole vector yet.
-     */
-
-    const currentBend =
-      normalize3D({
-        x:
-          mid.x -
-          root.x,
-        y:
-          mid.y -
-          root.y,
-        z:
-          mid.z -
-          root.z,
-      });
-
-    let bendDirection =
-      normalize3D({
-        x:
-          currentBend.x -
-          direction.x *
-            (
-              currentBend.x *
-                direction.x +
-              currentBend.y *
-                direction.y +
-              currentBend.z *
-                direction.z
-            ),
-
-        y:
-          currentBend.y -
-          direction.y *
-            (
-              currentBend.x *
-                direction.x +
-              currentBend.y *
-                direction.y +
-              currentBend.z *
-                direction.z
-            ),
-
-        z:
-          currentBend.z -
-          direction.z *
-            (
-              currentBend.x *
-                direction.x +
-              currentBend.y *
-                direction.y +
-              currentBend.z *
-                direction.z
-            ),
-      });
-
-    if (
-      Math.hypot(
-        bendDirection.x,
-        bendDirection.y,
-        bendDirection.z,
-      ) <=
-      Number.EPSILON
-    ) {
-      bendDirection = {
-        x: 0,
-        y: 1,
-        z: 0,
       };
+
+    if (
+      !byId.has(
+        jointId,
+      )
+    ) {
+      return [];
     }
 
-    const midPosition =
-      add3D(
-        root,
-        add3D(
-          scale3D(
-            direction,
-            midDistance,
-          ),
-          scale3D(
-            bendDirection,
-            height,
-          ),
-        ),
+    walk(
+      jointId,
+    );
+
+    return clone(
+      result,
+    );
+  }
+
+  ikChains(
+    rigId: string,
+  ): IKChain[] {
+    const rig =
+      this.require(
+        rigId,
       );
 
+    return rig.ikChains.map(
+      (
+        chain,
+      ) =>
+        clone(
+          chain,
+        ),
+    );
+  }
+
+  remove(
+    rigId: string,
+  ): boolean {
+    return this.rigs.delete(
+      requiredString(
+        rigId,
+        "rigId",
+      ),
+    );
+  }
+
+  stats() {
+    const rigs =
+      [
+        ...this.rigs.values(),
+      ];
+
     return {
-      rootDirection:
-        direction,
+      rigCount:
+        rigs.length,
 
-      midPosition,
+      jointCount:
+        rigs.reduce(
+          (
+            total,
+            rig,
+          ) =>
+            total +
+            rig.joints.length,
+          0,
+        ),
 
-      endPosition:
-        target,
-
-      reachable:
-        targetDistance >=
-          minimumDistance &&
-        targetDistance <=
-          maximumDistance,
-
-      targetDistance,
-
-      clampedDistance,
+      ikChainCount:
+        rigs.reduce(
+          (
+            total,
+            rig,
+          ) =>
+            total +
+            rig.ikChains.length,
+          0,
+        ),
     };
   }
 
-  fingerprint(
-    rig: RigDefinition,
-  ): string {
-    const validated =
-      this.validate(rig);
-
-    return createHash("sha256")
-      .update(
-        canonicalize(
-          validated,
-        ),
-      )
-      .digest("hex");
+  clear(): void {
+    this.rigs.clear();
   }
 }
+
+/* -------------------------------------------------------------------------- */
+/* Assembly Compatibility                                                     */
+/* -------------------------------------------------------------------------- */
+
+export function validateRigAssemblyCompatibility(
+  rig: CharacterRig,
+  assembly: CharacterAssembly,
+): {
+  valid: boolean;
+  errors: string[];
+} {
+  const errors: string[] =
+    [];
+
+  if (
+    rig.characterAssemblyId !==
+    assembly.assemblyId
+  ) {
+    errors.push(
+      "Rig characterAssemblyId does not match assembly assemblyId.",
+    );
+  }
+
+  if (
+    rig.representation !==
+      assembly.representation &&
+    !(
+      rig.representation ===
+        "hybrid" ||
+      assembly.representation ===
+        "hybrid"
+    )
+  ) {
+    errors.push(
+      "Rig and assembly representations are incompatible.",
+    );
+  }
+
+  if (
+    rig.joints.length ===
+    0
+  ) {
+    errors.push(
+      "Rig contains no joints.",
+    );
+  }
+
+  if (
+    !rig.joints.some(
+      (
+        joint,
+      ) =>
+        joint.jointId ===
+        rig.rootJointId,
+    )
+  ) {
+    errors.push(
+      "Rig root joint does not exist.",
+    );
+  }
+
+  return {
+    valid:
+      errors.length ===
+      0,
+
+    errors,
+  };
+}
+
+/* -------------------------------------------------------------------------- */
+/* Default Export                                                             */
+/* -------------------------------------------------------------------------- */
+
+export default RigCatalog;
