@@ -312,6 +312,174 @@ describe("render-2d / SvgRenderer", () => {
     );
   });
 
+  it("renders AA viseme with an open mouth", () => {
+    const renderer = new SvgRenderer();
+
+    const svg = renderer.render(
+      {
+        ...baseState(),
+        entities: [
+          {
+            id: "character-aa",
+            type: "character",
+            evaluation: {
+              viseme: {
+                viseme: "AA",
+                weight: 1,
+              },
+            },
+          },
+        ],
+      },
+      {
+        width: 640,
+        height: 360,
+      },
+    );
+
+    expect(svg).toContain('id="character-aa"');
+    expect(svg).toContain('fill="#D66A78"');
+  });
+
+  it("renders EE viseme with teeth", () => {
+    const renderer = new SvgRenderer();
+
+    const svg = renderer.render(
+      {
+        ...baseState(),
+        entities: [
+          {
+            id: "character-ee",
+            type: "character",
+            evaluation: {
+              viseme: {
+                viseme: "EE",
+                weight: 1,
+              },
+            },
+          },
+        ],
+      },
+      {
+        width: 640,
+        height: 360,
+      },
+    );
+
+    expect(svg).toContain('id="character-ee"');
+    expect(svg).toContain('fill="#FFFFFF"');
+  });
+
+  it("renders MBP viseme as a closed mouth", () => {
+    const renderer = new SvgRenderer();
+
+    const svg = renderer.render(
+      {
+        ...baseState(),
+        entities: [
+          {
+            id: "character-mbp",
+            type: "character",
+            evaluation: {
+              viseme: {
+                viseme: "MBP",
+                weight: 1,
+              },
+            },
+          },
+        ],
+      },
+      {
+        width: 640,
+        height: 360,
+      },
+    );
+
+    expect(svg).toContain('id="character-mbp"');
+    expect(svg).not.toContain('fill="#D66A78"');
+  });
+
+  it("handles unknown visemes safely", () => {
+    const renderer = new SvgRenderer();
+
+    const svg = renderer.render(
+      {
+        ...baseState(),
+        entities: [
+          {
+            id: "character-unknown-viseme",
+            type: "character",
+            evaluation: {
+              viseme: {
+                viseme: "UNKNOWN",
+                weight: 1,
+              },
+            },
+          },
+        ],
+      },
+      {
+        width: 640,
+        height: 360,
+      },
+    );
+
+    expect(svg).toContain(
+      'id="character-unknown-viseme"',
+    );
+    expect(svg).toContain("<svg");
+  });
+
+  it("supports partial viseme weight", () => {
+    const renderer = new SvgRenderer();
+
+    const restSvg = renderer.render(
+      {
+        ...baseState(),
+        entities: [
+          {
+            id: "character-rest",
+            type: "character",
+            evaluation: {
+              viseme: {
+                viseme: "AA",
+                weight: 0,
+              },
+            },
+          },
+        ],
+      },
+      {
+        width: 640,
+        height: 360,
+      },
+    );
+
+    const activeSvg = renderer.render(
+      {
+        ...baseState(),
+        entities: [
+          {
+            id: "character-active",
+            type: "character",
+            evaluation: {
+              viseme: {
+                viseme: "AA",
+                weight: 1,
+              },
+            },
+          },
+        ],
+      },
+      {
+        width: 640,
+        height: 360,
+      },
+    );
+
+    expect(restSvg).not.toBe(activeSvg);
+    expect(activeSvg).toContain('fill="#D66A78"');
+  });
   it("renders props with labels", () => {
     const renderer = new SvgRenderer();
 
@@ -533,7 +701,46 @@ describe("render-2d / SvgRenderer", () => {
       'scale(2 3)',
     );
   });
+it("applies camera rotation to world coordinates", () => {
+  const renderer = new SvgRenderer();
 
+  const svg = renderer.render(
+    {
+      ...baseState(),
+      camera: {
+        position: { x: 0, y: 0, z: 10 },
+        target: { x: 0, y: 0, z: 0 },
+        zoom: 1,
+        rotation: { z: 90 },
+      },
+      entities: [
+        {
+          id: "rotated-shape",
+          type: "shape",
+          transform: {
+            position: { x: 10, y: 0, z: 0 },
+          },
+          components: {
+            shape: "circle",
+            radius: 10,
+          },
+        },
+      ],
+    },
+    {
+      width: 640,
+      height: 360,
+    },
+  );
+
+  expect(svg).toContain(
+    'id="rotated-shape"',
+  );
+
+  expect(svg).toContain(
+    'translate(320 170)',
+  );
+});
   it("clamps opacity", () => {
     const renderer = new SvgRenderer();
 
@@ -613,31 +820,31 @@ describe("render-2d / SvgRenderer", () => {
   });
 
   it("allows safe HTTPS image references", () => {
-    const renderer = new SvgRenderer();
+  const renderer = new SvgRenderer();
 
-    const svg = renderer.render(
-      {
-        ...baseState(),
-        entities: [
-          {
-            id: "sprite-001",
-            type: "sprite",
-            components: {
-              src: "https://example.com/image.png",
-            },
+  const svg = renderer.render(
+    {
+      ...baseState(),
+      entities: [
+        {
+          id: "sprite-001",
+          type: "sprite",
+          components: {
+            src: "https://example.com/image.png",
           },
-        ],
-      },
-      {
-        width: 640,
-        height: 360,
-      },
-    );
+        },
+      ],
+    },
+    {
+      width: 640,
+      height: 360,
+    },
+  );
 
-    expect(svg).toContain(
-      'href="https://example.com/image.png"',
-    );
-  });
+  expect(svg).toContain(
+    'href="https://example.com/image.png"',
+  );
+});
 
   it("allows image data URLs for supported image formats", () => {
     const renderer = new SvgRenderer();
@@ -851,4 +1058,118 @@ describe("render-2d / SvgRenderer", () => {
       renderer.render(state, options),
     );
   });
+});
+it("renders arm swing animation", () => {
+  const renderer = new SvgRenderer();
+
+  const svg = renderer.render(
+    {
+      ...baseState(),
+      entities: [
+        {
+          id: "animated-character",
+          type: "character",
+          evaluation: {
+            motion: {
+              armSwing: 1,
+            },
+          },
+        },
+      ],
+    },
+    {
+      width: 640,
+      height: 360,
+    },
+  );
+
+  expect(svg).toContain('rotate(25)');
+  expect(svg).toContain('rotate(-25)');
+});
+
+it("renders leg swing animation", () => {
+  const renderer = new SvgRenderer();
+
+  const svg = renderer.render(
+    {
+      ...baseState(),
+      entities: [
+        {
+          id: "walking-character",
+          type: "character",
+          evaluation: {
+            motion: {
+              legSwing: 1,
+            },
+          },
+        },
+      ],
+    },
+    {
+      width: 640,
+      height: 360,
+    },
+  );
+
+  expect(svg).toContain('rotate(-20)');
+  expect(svg).toContain('rotate(20)');
+});
+
+it("renders body bounce animation", () => {
+  const renderer = new SvgRenderer();
+
+  const svg = renderer.render(
+    {
+      ...baseState(),
+      entities: [
+        {
+          id: "bouncing-character",
+          type: "character",
+          evaluation: {
+            motion: {
+              bodyBounce: 1,
+            },
+          },
+        },
+      ],
+    },
+    {
+      width: 640,
+      height: 360,
+    },
+  );
+
+  expect(svg).toContain('translate(0 -5)');
+});
+
+it("renders complete walking animation", () => {
+  const renderer = new SvgRenderer();
+
+  const svg = renderer.render(
+    {
+      ...baseState(),
+      entities: [
+        {
+          id: "complete-walk",
+          type: "character",
+          evaluation: {
+            motion: {
+              armSwing: 0.8,
+              legSwing: 0.8,
+              bodyBounce: 0.5,
+            },
+          },
+        },
+      ],
+    },
+    {
+      width: 640,
+      height: 360,
+    },
+  );
+
+  expect(svg).toContain('id="complete-walk"');
+  expect(svg).toContain("rotate(20)");
+  expect(svg).toContain("rotate(-16)");
+  expect(svg).toContain("translate(0 -2.5)");
 });

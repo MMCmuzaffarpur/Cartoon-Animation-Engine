@@ -215,7 +215,160 @@ function componentsOf(
 ): Record<string, unknown> {
   return entity.components ?? {};
 }
+/* -------------------------------------------------------------------------- */
+/* Viseme                                                                      */
+/* -------------------------------------------------------------------------- */
 
+interface VisemeMouth {
+  widthScale: number;
+  heightScale: number;
+  open: number;
+  smileScale: number;
+  showTeeth: boolean;
+  showTongue: boolean;
+}
+
+function resolveVisemeMouth(
+  visemeValue: unknown,
+  weightValue: unknown,
+): VisemeMouth {
+  const viseme =
+    asString(visemeValue, "REST")
+      .trim()
+      .toUpperCase();
+
+  const weight = clamp(
+    finiteNumber(weightValue, 0),
+    0,
+    1,
+  );
+
+  const base: VisemeMouth = {
+    widthScale: 1,
+    heightScale: 1,
+    open: 0,
+    smileScale: 0,
+    showTeeth: false,
+    showTongue: false,
+  };
+
+  const shapes: Record<string, VisemeMouth> = {
+    REST: {
+      widthScale: 0.85,
+      heightScale: 0.35,
+      open: 0.08,
+      smileScale: 0,
+      showTeeth: false,
+      showTongue: false,
+    },
+
+    MBP: {
+      widthScale: 0.85,
+      heightScale: 0.12,
+      open: 0,
+      smileScale: 0,
+      showTeeth: false,
+      showTongue: false,
+    },
+
+    FV: {
+      widthScale: 0.9,
+      heightScale: 0.3,
+      open: 0.18,
+      smileScale: 0,
+      showTeeth: true,
+      showTongue: false,
+    },
+
+    AA: {
+      widthScale: 1.1,
+      heightScale: 1.35,
+      open: 1,
+      smileScale: 0,
+      showTeeth: false,
+      showTongue: true,
+    },
+
+    EE: {
+      widthScale: 1.25,
+      heightScale: 0.5,
+      open: 0.45,
+      smileScale: 0.8,
+      showTeeth: true,
+      showTongue: false,
+    },
+
+    IH: {
+      widthScale: 1.05,
+      heightScale: 0.7,
+      open: 0.6,
+      smileScale: 0.3,
+      showTeeth: true,
+      showTongue: false,
+    },
+
+    OH: {
+      widthScale: 0.8,
+      heightScale: 1.25,
+      open: 0.9,
+      smileScale: 0,
+      showTeeth: false,
+      showTongue: false,
+    },
+
+    OU: {
+      widthScale: 0.65,
+      heightScale: 1.1,
+      open: 0.8,
+      smileScale: 0,
+      showTeeth: false,
+      showTongue: false,
+    },
+
+    L: {
+      widthScale: 1,
+      heightScale: 0.6,
+      open: 0.45,
+      smileScale: 0.1,
+      showTeeth: true,
+      showTongue: true,
+    },
+
+    TH: {
+      widthScale: 0.95,
+      heightScale: 0.5,
+      open: 0.3,
+      smileScale: 0,
+      showTeeth: true,
+      showTongue: true,
+    },
+  };
+
+  const shape =
+    shapes[viseme] ?? base;
+
+  return {
+    widthScale:
+      1 +
+      (shape.widthScale - 1) * weight,
+
+    heightScale:
+      1 +
+      (shape.heightScale - 1) * weight,
+
+    open:
+      shape.open * weight,
+
+    smileScale:
+      shape.smileScale * weight,
+
+    showTeeth:
+      shape.showTeeth && weight >= 0.35,
+
+    showTongue:
+      shape.showTongue && weight >= 0.35,
+  };
+}
 /* -------------------------------------------------------------------------- */
 /* Camera                                                                     */
 /* -------------------------------------------------------------------------- */
@@ -266,22 +419,47 @@ function worldToScreen(
   x: number;
   y: number;
 } {
-  const zoom =
-    cameraScale(state);
+  const zoom = cameraScale(state);
+  const camera = cameraOffset(state);
 
-  const camera =
-    cameraOffset(state);
+  const cameraRotation =
+    Number.isFinite(state?.camera?.rotation?.z)
+      ? state.camera.rotation.z
+      : Number.isFinite(state?.camera?.rotationZ)
+        ? state.camera.rotationZ
+        : 0;
+
+  const radians =
+    (-cameraRotation * Math.PI) / 180;
+
+  const cos =
+    Math.cos(radians);
+
+  const sin =
+    Math.sin(radians);
+
+  const relativeX =
+    position.x - camera.x;
+
+  const relativeY =
+    position.y - camera.y;
+
+  const rotatedX =
+    relativeX * cos -
+    relativeY * sin;
+
+  const rotatedY =
+    relativeX * sin +
+    relativeY * cos;
 
   return {
     x:
       width / 2 +
-      (position.x - camera.x) *
-        zoom,
+      rotatedX * zoom,
 
     y:
       height / 2 +
-      (position.y - camera.y) *
-        zoom,
+      rotatedY * zoom,
   };
 }
 
@@ -722,194 +900,392 @@ export class SvgRenderer {
   /* ------------------------------------------------------------------------ */
 
   private renderCharacter(
-    entity: RenderEntity,
-  ): string {
-    const components =
-      componentsOf(entity);
+  entity: RenderEntity,
+): string {
+  const components = componentsOf(entity);
+  const evaluation = entity.evaluation ?? {};
+  const facial = evaluation.facial ?? {};
+  const motion = evaluation.motion ?? {};
+  const viseme = evaluation.viseme ?? {};
 
-    const evaluation =
-      entity.evaluation ?? {};
+  // --------------------------------------------------
+  // Motion Evaluation
+  // --------------------------------------------------
 
-    const facial =
-      evaluation.facial ?? {};
+  const armSwing = clamp(
+    finiteNumber(motion.armSwing, 0),
+    -1,
+    1,
+  );
 
-    const skin =
-      color(
-        components.skin,
-        DEFAULT_SKIN,
-      );
+  const legSwing = clamp(
+    finiteNumber(motion.legSwing, 0),
+    -1,
+    1,
+  );
 
-    const hair =
-      color(
-        components.hairColor ??
-          components.hair,
-        DEFAULT_HAIR,
-      );
+  const bodyBounce = clamp(
+    finiteNumber(motion.bodyBounce, 0),
+    -1,
+    1,
+  );
 
-    const top =
-      color(
-        components.topColor ??
-          components.outfitColor,
-        DEFAULT_TOP,
-      );
+  const leftArmAngle = armSwing * 25;
+  const rightArmAngle = armSwing * -25;
 
-    const eyeColor =
-      color(
-        components.eyeColor,
-        "#222222",
-      );
+  const leftLegAngle = legSwing * -20;
+  const rightLegAngle = legSwing * 20;
 
-    const smile =
-      clamp(
-        finiteNumber(
-          facial.smile,
-          0,
-        ),
-        -1,
-        1,
-      );
+  const bounceY = bodyBounce * -5;
 
-    const mouthOpen =
-      clamp(
-        finiteNumber(
-          facial.mouthOpen,
-          0,
-        ),
-        0,
-        1,
-      );
+  // --------------------------------------------------
+  // Viseme / Lip Sync
+  // --------------------------------------------------
 
-    const browRaise =
-      finiteNumber(
-        facial.browRaise,
-        0,
-      );
+  const visemeMouth = resolveVisemeMouth(
+    viseme.viseme,
+    viseme.weight,
+  );
 
-    const eyeSquint =
-      clamp(
-        finiteNumber(
-          facial.eyeSquint,
-          0,
-        ),
-        -1,
-        1,
-      );
+  // --------------------------------------------------
+  // Character Colors
+  // --------------------------------------------------
 
-    const blink =
-      clamp(
-        finiteNumber(
-          facial.blink,
-          0,
-        ),
-        0,
-        1,
-      );
+  const skin = color(
+    components.skin,
+    DEFAULT_SKIN,
+  );
 
-    const squintScale =
-      clamp(
-        1 -
-          Math.max(
-            0,
-            eyeSquint,
-          ) *
-            0.55,
-        0.35,
-        1,
-      );
+  const hair = color(
+    components.hairColor ?? components.hair,
+    DEFAULT_HAIR,
+  );
 
-    /*
-     * Apply squint before the final minimum-height clamp.
-     * This guarantees that a fully blinked eye cannot
-     * become smaller than the canonical 1.5px closed-eye
-     * threshold.
-     */
-    /*
-     * squintScale is already included in eyeHeight.
-     * Do not multiply it again during SVG emission,
-     * otherwise blink + squint would be applied twice.
-     */
-    const eyeHeight =
-      Math.max(
-        1.5,
-        6 * (1 - blink) * squintScale,
-      );
+  const top = color(
+    components.topColor ?? components.outfitColor,
+    DEFAULT_TOP,
+  );
 
-    const eyeY =
-      -25 -
-      browRaise * 5;
+  const eyeColor = color(
+    components.eyeColor,
+    "#222222",
+  );
 
-    const mouthWidth =
-      18 +
-      Math.abs(smile) * 5;
+  const shoeColor = color(
+    components.shoeColor,
+    "#303030",
+  );
 
-    const mouthHeight =
-      Math.max(
-        2,
-        4 +
-          mouthOpen * 14,
-      );
+  const pantsColor = color(
+    components.pantsColor,
+    "#26364A",
+  );
 
-    return [
-      `<ellipse ` +
-        `cx="0" cy="90" ` +
-        `rx="42" ry="12" ` +
-        `fill="#000000" ` +
-        `opacity="0.15"/>`,
+  // --------------------------------------------------
+  // Facial Evaluation
+  // --------------------------------------------------
 
-      `<rect ` +
-        `x="-30" y="20" ` +
-        `width="60" height="70" ` +
-        `rx="18" ` +
-        `fill="${escapeXml(top)}"/>`,
+  const smile = clamp(
+    finiteNumber(facial.smile, 0),
+    -1,
+    1,
+  );
 
-      `<circle ` +
-        `cx="0" cy="-25" ` +
-        `r="48" ` +
-        `fill="${escapeXml(skin)}"/>`,
+  const mouthOpen = clamp(
+    finiteNumber(facial.mouthOpen, 0),
+    0,
+    1,
+  );
 
-      `<path ` +
-        `d="M-45-28 Q0-75 45-28 ` +
-        `L38-58 Q0-88-38-58Z" ` +
-        `fill="${escapeXml(hair)}"/>`,
+  const browRaise = clamp(
+    finiteNumber(facial.browRaise, 0),
+    -1,
+    1,
+  );
 
-      `<ellipse ` +
-        `cx="-17" ` +
-        `cy="${eyeY}" ` +
-        `rx="6" ` +
-        `ry="${eyeHeight}" ` +
-        `fill="${escapeXml(eyeColor)}"/>`,
+  const eyeSquint = clamp(
+    finiteNumber(facial.eyeSquint, 0),
+    -1,
+    1,
+  );
 
-      `<ellipse ` +
-        `cx="17" ` +
-        `cy="${eyeY}" ` +
-        `rx="6" ` +
-        `ry="${eyeHeight}" ` +
-        `fill="${escapeXml(eyeColor)}"/>`,
+  const blink = clamp(
+    finiteNumber(facial.blink, 0),
+    0,
+    1,
+  );
 
-      `<path ` +
-        `d="M-7-8 Q0-3 7-8" ` +
-        `fill="none" ` +
-        `stroke="#9B6B55" ` +
-        `stroke-width="2" ` +
-        `stroke-linecap="round"/>`,
+  const squintScale = clamp(
+    1 - Math.max(0, eyeSquint) * 0.55,
+    0.35,
+    1,
+  );
 
-      `<ellipse ` +
-        `cx="0" cy="5" ` +
-        `rx="${mouthWidth}" ` +
-        `ry="${mouthHeight}" ` +
-        `fill="#5A2630"/>`,
+  const eyeHeight = Math.max(
+    1.5,
+    6 * (1 - blink) * squintScale,
+  );
 
-      `<path ` +
-        `d="M${-(mouthWidth - 3)} 5 ` +
-        `Q0 ${5 - smile * 9} ` +
-        `${mouthWidth - 3} 5" ` +
-        `fill="none" ` +
-        `stroke="#2F1118" ` +
-        `stroke-width="2" ` +
-        `stroke-linecap="round"/>`,
-    ].join("");
-  }
+  const eyeY = -25 - browRaise * 5;
 
+  const mouthWidth =
+    (18 + Math.abs(smile) * 5) *
+    visemeMouth.widthScale;
+
+  const combinedMouthOpen = clamp(
+    Math.max(mouthOpen, visemeMouth.open),
+    0,
+    1,
+  );
+
+  const mouthHeight = Math.max(
+    2,
+    (4 + combinedMouthOpen * 14) *
+      visemeMouth.heightScale,
+  );
+
+  const mouthSmile = clamp(
+    smile + visemeMouth.smileScale,
+    -1,
+    1,
+  );
+
+  // --------------------------------------------------
+  // Animated Character
+  // --------------------------------------------------
+
+  return [
+    // Ground shadow
+    `<ellipse
+      cx="0"
+      cy="90"
+      rx="42"
+      ry="12"
+      fill="#000000"
+      opacity="0.15"
+    />`,
+
+    // Body bounce container
+    `<g transform="translate(0 ${bounceY})">`,
+
+    // ------------------------------------------------
+    // Left Leg
+    // ------------------------------------------------
+
+    `<g transform="translate(-16 70) rotate(${leftLegAngle})">`,
+    `<rect
+      x="-10"
+      y="0"
+      width="20"
+      height="43"
+      rx="8"
+      fill="${escapeXml(pantsColor)}"
+    />`,
+    `<rect
+      x="-12"
+      y="35"
+      width="24"
+      height="15"
+      rx="7"
+      fill="${escapeXml(shoeColor)}"
+    />`,
+    `</g>`,
+
+    // ------------------------------------------------
+    // Right Leg
+    // ------------------------------------------------
+
+    `<g transform="translate(16 70) rotate(${rightLegAngle})">`,
+    `<rect
+      x="-10"
+      y="0"
+      width="20"
+      height="43"
+      rx="8"
+      fill="${escapeXml(pantsColor)}"
+    />`,
+    `<rect
+      x="-12"
+      y="35"
+      width="24"
+      height="15"
+      rx="7"
+      fill="${escapeXml(shoeColor)}"
+    />`,
+    `</g>`,
+
+    // ------------------------------------------------
+    // Left Arm
+    // ------------------------------------------------
+
+    `<g transform="translate(-30 28) rotate(${leftArmAngle})">`,
+    `<rect
+      x="-9"
+      y="0"
+      width="18"
+      height="48"
+      rx="9"
+      fill="${escapeXml(skin)}"
+    />`,
+    `<circle
+      cx="0"
+      cy="49"
+      r="10"
+      fill="${escapeXml(skin)}"
+    />`,
+    `</g>`,
+
+    // ------------------------------------------------
+    // Right Arm
+    // ------------------------------------------------
+
+    `<g transform="translate(30 28) rotate(${rightArmAngle})">`,
+    `<rect
+      x="-9"
+      y="0"
+      width="18"
+      height="48"
+      rx="9"
+      fill="${escapeXml(skin)}"
+    />`,
+    `<circle
+      cx="0"
+      cy="49"
+      r="10"
+      fill="${escapeXml(skin)}"
+    />`,
+    `</g>`,
+
+    // ------------------------------------------------
+    // Torso
+    // ------------------------------------------------
+
+    `<rect
+      x="-30"
+      y="20"
+      width="60"
+      height="70"
+      rx="18"
+      fill="${escapeXml(top)}"
+    />`,
+
+    // ------------------------------------------------
+    // Neck
+    // ------------------------------------------------
+
+    `<rect
+      x="-12"
+      y="8"
+      width="24"
+      height="20"
+      rx="8"
+      fill="${escapeXml(skin)}"
+    />`,
+
+    // ------------------------------------------------
+    // Head
+    // ------------------------------------------------
+
+    `<circle
+      cx="0"
+      cy="-25"
+      r="48"
+      fill="${escapeXml(skin)}"
+    />`,
+
+    // ------------------------------------------------
+    // Hair
+    // ------------------------------------------------
+
+    `<path
+      d="M-45-28
+         Q0-75 45-28
+         L38-58
+         Q0-88-38-58Z"
+      fill="${escapeXml(hair)}"
+    />`,
+
+    // ------------------------------------------------
+    // Eyes
+    // ------------------------------------------------
+
+    `<ellipse
+      cx="-17"
+      cy="${eyeY}"
+      rx="6"
+      ry="${eyeHeight}"
+      fill="${escapeXml(eyeColor)}"
+    />`,
+
+    `<ellipse
+      cx="17"
+      cy="${eyeY}"
+      rx="6"
+      ry="${eyeHeight}"
+      fill="${escapeXml(eyeColor)}"
+    />`,
+
+    // ------------------------------------------------
+    // Nose
+    // ------------------------------------------------
+
+    `<path
+      d="M-7-8 Q0-3 7-8"
+      fill="none"
+      stroke="#9B6B55"
+      stroke-width="2"
+      stroke-linecap="round"
+    />`,
+
+    // ------------------------------------------------
+    // Mouth
+    // ------------------------------------------------
+
+    `<ellipse
+      cx="0"
+      cy="5"
+      rx="${mouthWidth}"
+      ry="${mouthHeight}"
+      fill="#5A2630"
+    />`,
+
+    // Teeth
+    visemeMouth.showTeeth
+      ? `<path
+          d="M${-(mouthWidth * 0.65)} 2
+             Q0 ${-mouthHeight * 0.45}
+             ${mouthWidth * 0.65} 2
+             L${mouthWidth * 0.55} 6
+             L${-(mouthWidth * 0.55)} 6Z"
+          fill="#FFFFFF"
+        />`
+      : "",
+
+    // Tongue
+    visemeMouth.showTongue
+      ? `<ellipse
+          cx="0"
+          cy="${5 + mouthHeight * 0.35}"
+          rx="${mouthWidth * 0.48}"
+          ry="${Math.max(1.5, mouthHeight * 0.25)}"
+          fill="#D66A78"
+        />`
+      : "",
+
+    // Smile curve
+    `<path
+      d="M${-(mouthWidth - 3)} 5
+         Q0 ${5 - mouthSmile * 9}
+         ${mouthWidth - 3} 5"
+      fill="none"
+      stroke="#2F1118"
+      stroke-width="2"
+      stroke-linecap="round"
+    />`,
+
+    `</g>`,
+  ].join("");
+}
   /* ------------------------------------------------------------------------ */
   /* Prop                                                                     */
   /* ------------------------------------------------------------------------ */
