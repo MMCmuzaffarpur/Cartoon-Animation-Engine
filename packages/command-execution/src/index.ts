@@ -403,8 +403,7 @@ export class CommandExecutor {
 
     return result;
   }
-
-  /**
+    /**
    * Execute a single canonical command.
    */
   async execute(
@@ -426,13 +425,9 @@ export class CommandExecutor {
    */
   private validateShape(
     input: unknown,
-  ): Record<
-    string,
-    any
-  > {
+  ): Record<string, any> {
     if (
-      typeof input !==
-        "object" ||
+      typeof input !== "object" ||
       input === null ||
       Array.isArray(input)
     ) {
@@ -443,14 +438,10 @@ export class CommandExecutor {
     }
 
     const command =
-      input as Record<
-        string,
-        any
-      >;
+      input as Record<string, any>;
 
     if (
-      typeof command.projectId !==
-      "string"
+      typeof command.projectId !== "string"
     ) {
       throw new CaeError(
         "COMMAND_INVALID",
@@ -459,10 +450,8 @@ export class CommandExecutor {
     }
 
     if (
-      typeof command.idempotencyKey !==
-        "string" ||
-      command.idempotencyKey.length ===
-        0
+      typeof command.idempotencyKey !== "string" ||
+      command.idempotencyKey.length === 0
     ) {
       throw new CaeError(
         "COMMAND_INVALID",
@@ -479,19 +468,12 @@ export class CommandExecutor {
    * Object keys are sorted recursively so that equivalent
    * objects produce the same fingerprint regardless of key
    * insertion order.
-   *
-   * No crypto hash is required here because the fingerprint is
-   * only an in-memory equality token. The canonical serialized
-   * representation is sufficient and avoids introducing another
-   * runtime dependency into command execution.
    */
   private commandFingerprint(
     command: unknown,
   ): string {
     return JSON.stringify(
-      this.sortCanonicalValue(
-        command,
-      ),
+      this.sortCanonicalValue(command),
     );
   }
 
@@ -508,38 +490,24 @@ export class CommandExecutor {
       return value;
     }
 
-    if (
-      typeof value !==
-      "object"
-    ) {
+    if (typeof value !== "object") {
       return value;
     }
 
-    if (
-      Array.isArray(value)
-    ) {
+    if (Array.isArray(value)) {
       return value.map(
         (item) =>
-          this.sortCanonicalValue(
-            item,
-          ),
+          this.sortCanonicalValue(item),
       );
     }
 
-    const output: Record<
-      string,
-      any
-    > = {};
+    const output: Record<string, any> = {};
 
     for (
-      const key of Object.keys(
-        value,
-      ).sort()
+      const key of Object.keys(value).sort()
     ) {
       output[key] =
-        this.sortCanonicalValue(
-          value[key],
-        );
+        this.sortCanonicalValue(value[key]);
     }
 
     return output;
@@ -555,23 +523,16 @@ export class CommandExecutor {
     p: any,
     c: any,
   ) {
-    const byId = (
-      id: string,
-    ) =>
+    const byId = (id: string) =>
       p.entities.find(
-        (entity: any) =>
-          entity.id === id,
+        (entity: any) => entity.id === id,
       );
 
-    switch (
-      c.commandType
-    ) {
+    switch (c.commandType) {
       case "CREATE_CHARACTER": {
-        const name =
-          String(
-            c.payload.name ??
-              "",
-          ).trim();
+        const name = String(
+          c.payload.name ?? "",
+        ).trim();
 
         if (!name) {
           throw new CaeError(
@@ -583,10 +544,8 @@ export class CommandExecutor {
         if (
           p.entities.some(
             (entity: any) =>
-              entity.type ===
-                "character" &&
-              entity.name
-                .toLowerCase() ===
+              entity.type === "character" &&
+              String(entity.name).toLowerCase() ===
                 name.toLowerCase(),
           )
         ) {
@@ -601,35 +560,37 @@ export class CommandExecutor {
           c.payload.entityId ??
           crypto.randomUUID();
 
+        if (
+          p.entities.some(
+            (entity: any) => entity.id === id,
+          )
+        ) {
+          throw new CaeError(
+            "ENTITY_DUPLICATE",
+            "Character ID already exists",
+            [String(id)],
+          );
+        }
+
         p.entities.push({
           id,
           type: "character",
           name,
-          aliases:
-            c.payload.aliases ??
-            [],
+          aliases: c.payload.aliases ?? [],
           representation:
-            c.payload
-              .representation ??
-            "2d",
+            c.payload.representation ?? "2d",
 
           transform: {
             position: {
-              x:
-                c.payload.x ??
-                640,
-              y:
-                c.payload.y ??
-                420,
-              z: 0,
+              x: c.payload.x ?? 640,
+              y: c.payload.y ?? 420,
+              z: c.payload.z ?? 0,
             },
-
             rotation: {
               x: 0,
               y: 0,
               z: 0,
             },
-
             scale: {
               x: 1,
               y: 1,
@@ -638,32 +599,20 @@ export class CommandExecutor {
           },
 
           components: {
-            skin:
-              c.payload.skin ??
-              "#F1C7A8",
-
+            skin: c.payload.skin ?? "#F1C7A8",
             hairColor:
-              c.payload
-                .hairColor ??
-              "#24170F",
-
+              c.payload.hairColor ?? "#24170F",
             topColor:
-              c.payload.topColor ??
-              "#3A6EA5",
-
-            character:
-              c.payload,
+              c.payload.topColor ?? "#3A6EA5",
+            character: c.payload,
           },
         });
 
         break;
       }
-
-      case "MODIFY_CHARACTER": {
+            case "MODIFY_CHARACTER": {
         const entity =
-          byId(
-            c.targetIds[0],
-          );
+          byId(c.targetIds[0]);
 
         if (!entity) {
           throw new CaeError(
@@ -682,9 +631,7 @@ export class CommandExecutor {
 
       case "MODIFY_OUTFIT": {
         const entity =
-          byId(
-            c.targetIds[0],
-          );
+          byId(c.targetIds[0]);
 
         if (!entity) {
           throw new CaeError(
@@ -703,9 +650,7 @@ export class CommandExecutor {
 
       case "APPLY_MAKEUP": {
         const entity =
-          byId(
-            c.targetIds[0],
-          );
+          byId(c.targetIds[0]);
 
         if (!entity) {
           throw new CaeError(
@@ -716,60 +661,79 @@ export class CommandExecutor {
 
         entity.components = {
           ...entity.components,
-          makeup:
-            c.payload,
+          makeup: c.payload,
         };
 
         break;
       }
 
       case "CREATE_SCENE": {
+        /*
+         * Planner payloads may use `id` or `sceneId`.
+         * Preserve the supplied ID whenever possible.
+         */
         const id =
           c.payload.sceneId ??
+          c.payload.id ??
           crypto.randomUUID();
 
-        p.scenes.push({
+        if (
+          p.scenes.some(
+            (scene: any) => scene.id === id,
+          ) ||
+          p.entities.some(
+            (entity: any) => entity.id === id,
+          )
+        ) {
+          throw new CaeError(
+            "ENTITY_DUPLICATE",
+            "Scene ID already exists",
+            [String(id)],
+          );
+        }
+
+        const scene = {
           ...c.payload,
           id,
-        });
+          entities: Array.isArray(c.payload.entities)
+            ? [...c.payload.entities]
+            : [],
+        };
+
+        p.scenes.push(scene);
 
         p.entities.push({
           id,
           type: "scene",
-
           name:
             c.payload.name ??
             c.payload.template ??
             "Scene",
-
           aliases: [],
-
           representation:
             c.payload.type ??
+            c.payload.representation ??
             "2d",
-
           transform: {
             position: {
               x: 0,
               y: 0,
               z: 0,
             },
-
             rotation: {
               x: 0,
               y: 0,
               z: 0,
             },
-
             scale: {
               x: 1,
               y: 1,
               z: 1,
             },
           },
-
-          components:
-            c.payload,
+          components: {
+            ...scene,
+          },
         });
 
         break;
@@ -779,8 +743,7 @@ export class CommandExecutor {
         const scene =
           p.scenes.find(
             (item: any) =>
-              item.id ===
-              c.payload.sceneId,
+              item.id === c.payload.sceneId,
           );
 
         if (!scene) {
@@ -790,61 +753,73 @@ export class CommandExecutor {
           );
         }
 
-        scene.entities ??=
-          [];
+        scene.entities ??= [];
+
+        const propId =
+          c.payload.entityId ??
+          crypto.randomUUID();
+
+        if (
+          scene.entities.some(
+            (item: any) => item.id === propId,
+          ) ||
+          p.entities.some(
+            (item: any) => item.id === propId,
+          )
+        ) {
+          throw new CaeError(
+            "ENTITY_DUPLICATE",
+            "Prop ID already exists",
+            [String(propId)],
+          );
+        }
 
         scene.entities.push({
-          id:
-            c.payload.entityId ??
-            crypto.randomUUID(),
-
+          id: propId,
           type: "prop",
-
-          name:
-            c.payload.name ??
-            "Prop",
-
+          name: c.payload.name ?? "Prop",
           representation:
-            "2d",
-
+            c.payload.representation ?? "2d",
           transform: {
             position: {
-              x:
-                c.payload.x ??
-                0,
-              y:
-                c.payload.y ??
-                0,
-              z:
-                c.payload.z ??
-                0,
+              x: c.payload.x ?? 0,
+              y: c.payload.y ?? 0,
+              z: c.payload.z ?? 0,
             },
-
             rotation: {
               x: 0,
               y: 0,
               z: 0,
             },
-
             scale: {
               x: 1,
               y: 1,
               z: 1,
             },
           },
-
-          components:
-            c.payload,
+          components: {
+            ...c.payload,
+          },
         });
+
+        /*
+         * Keep the scene entity's component snapshot synchronized
+         * with the updated scene record.
+         */
+        const sceneEntity = byId(scene.id);
+
+        if (sceneEntity) {
+          sceneEntity.components = {
+            ...sceneEntity.components,
+            ...scene,
+          };
+        }
 
         break;
       }
-
-      case "PLACE_CHARACTER": {
+            case "PLACE_CHARACTER": {
         const entity =
-          byId(
-            c.targetIds[0],
-          );
+          byId(c.targetIds[0]);
 
         if (!entity) {
           throw new CaeError(
@@ -853,27 +828,89 @@ export class CommandExecutor {
           );
         }
 
-        entity.transform.position =
-          {
-            x:
-              c.payload.x ??
-              640,
-            y:
-              c.payload.y ??
-              420,
-            z:
-              c.payload.z ??
-              0,
+        if (entity.type !== "character") {
+          throw new CaeError(
+            "COMMAND_INVALID",
+            "PLACE_CHARACTER target must be a character",
+            [String(entity.id)],
+          );
+        }
+
+        const position = {
+          x: c.payload.x ?? 640,
+          y: c.payload.y ?? 420,
+          z: c.payload.z ?? 0,
+        };
+
+        if (
+          !Number.isFinite(position.x) ||
+          !Number.isFinite(position.y) ||
+          !Number.isFinite(position.z)
+        ) {
+          throw new CaeError(
+            "COMMAND_INVALID",
+            "Character position coordinates must be finite numbers",
+          );
+        }
+
+        entity.transform.position = position;
+
+        const sceneId = c.payload.sceneId;
+
+        if (sceneId !== undefined && sceneId !== null) {
+          const scene =
+            p.scenes.find(
+              (item: any) => item.id === sceneId,
+            );
+
+          if (!scene) {
+            throw new CaeError(
+              "ENTITY_NOT_FOUND",
+              "Target scene not found",
+              [String(sceneId)],
+            );
+          }
+
+          scene.entities ??= [];
+
+          const placedEntity = {
+            ...entity,
+            transform: {
+              ...entity.transform,
+              position: { ...position },
+            },
+            components: {
+              ...entity.components,
+            },
           };
+
+          const existingIndex =
+            scene.entities.findIndex(
+              (item: any) => item.id === entity.id,
+            );
+
+          if (existingIndex >= 0) {
+            scene.entities[existingIndex] = placedEntity;
+          } else {
+            scene.entities.push(placedEntity);
+          }
+
+          const sceneEntity = byId(scene.id);
+
+          if (sceneEntity) {
+            sceneEntity.components = {
+              ...sceneEntity.components,
+              ...scene,
+            };
+          }
+        }
 
         break;
       }
 
       case "CREATE_EXPRESSION": {
         const entity =
-          byId(
-            c.targetIds[0],
-          );
+          byId(c.targetIds[0]);
 
         if (!entity) {
           throw new CaeError(
@@ -883,17 +920,14 @@ export class CommandExecutor {
         }
 
         entity.components.expression =
-          c.payload.expression ??
-          "neutral";
+          c.payload.expression ?? "neutral";
 
         break;
       }
 
-      case "CREATE_ANIMATION": {
+            case "CREATE_ANIMATION": {
         const entity =
-          byId(
-            c.targetIds[0],
-          );
+          byId(c.targetIds[0]);
 
         if (!entity) {
           throw new CaeError(
@@ -902,19 +936,53 @@ export class CommandExecutor {
           );
         }
 
-        entity.components.motionLayers ??=
-          [];
+        entity.components.motionLayers ??= [];
 
-        entity.components.motionLayers.push(
-          c.payload.layer,
-        );
+        /*
+         * Preserve existing animation-layer payloads.
+         *
+         * Legacy format:
+         *   payload: { layer: { id, clipId, weight } }
+         *
+         * Planner format:
+         *   payload: { motion, durationTicks, startTick }
+         */
+        let layer: any;
+
+        if (
+          c.payload.layer !== null &&
+          typeof c.payload.layer === "object" &&
+          !Array.isArray(c.payload.layer)
+        ) {
+          // Keep the supplied legacy layer unchanged.
+          layer = c.payload.layer;
+        } else if (
+          typeof c.payload.motion === "string" &&
+          c.payload.motion.trim().length > 0
+        ) {
+          // Support the planner's direct-motion format.
+          layer = {
+            motion: c.payload.motion,
+            durationTicks:
+              c.payload.durationTicks ?? 48000,
+            ...(c.payload.startTick !== undefined
+              ? { startTick: c.payload.startTick }
+              : {}),
+          };
+        } else {
+          throw new CaeError(
+            "COMMAND_INVALID",
+            "Animation layer or motion is required",
+          );
+        }
+
+        entity.components.motionLayers.push(layer);
 
         break;
       }
 
       case "CREATE_DIALOGUE": {
-        p.settings.dialogueTracks ??=
-          [];
+        p.settings.dialogueTracks ??= [];
 
         p.settings.dialogueTracks.push(
           c.payload,
@@ -925,8 +993,7 @@ export class CommandExecutor {
 
       case "MODIFY_CAMERA": {
         p.settings.camera = {
-          ...(p.settings.camera ??
-            {}),
+          ...(p.settings.camera ?? {}),
           ...c.payload,
         };
 
@@ -934,8 +1001,7 @@ export class CommandExecutor {
       }
 
       case "CREATE_CAMERA_SHOT": {
-        p.settings.shots ??=
-          [];
+        p.settings.shots ??= [];
 
         p.settings.shots.push(
           c.payload,
@@ -946,9 +1012,7 @@ export class CommandExecutor {
 
       case "CREATE_LIPSYNC": {
         const entity =
-          byId(
-            c.targetIds[0],
-          );
+          byId(c.targetIds[0]);
 
         if (!entity) {
           throw new CaeError(
@@ -972,8 +1036,7 @@ export class CommandExecutor {
       }
 
       case "CREATE_RENDER": {
-        p.settings.renderRequests ??=
-          [];
+        p.settings.renderRequests ??= [];
 
         p.settings.renderRequests.push(
           c.payload,

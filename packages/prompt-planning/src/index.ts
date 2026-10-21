@@ -1,3 +1,4 @@
+
 import {
   canonicalHash,
   CaeError,
@@ -5,101 +6,47 @@ import {
 
 import type { CommandPlanT } from "../../contracts/src/index.js";
 
-/* -------------------------------------------------------------------------- */
-/*                                  Contract                                  */
-/* -------------------------------------------------------------------------- */
-
 export interface Planner {
-  plan(
-    prompt: string,
-    project: any,
-    revisionId: string,
-  ): CommandPlanT;
+  plan(prompt: string, project: any, revisionId: string): CommandPlanT;
 }
 
-/* -------------------------------------------------------------------------- */
-/*                              Planner Constants                             */
-/* -------------------------------------------------------------------------- */
-
-export const PROMPT_PLANNER_VERSION = "1.0.0";
+export const PROMPT_PLANNER_VERSION = "1.1.0";
 export const PROMPT_PLANNER_ID = "rule-based";
 
 const UUID_NAMESPACE = "00000000-0000-4000-8000-000000000000";
 
-/* -------------------------------------------------------------------------- */
-/*                           Deterministic Utilities                          */
-/* -------------------------------------------------------------------------- */
+type Representation = "2d" | "3d" | "hybrid";
 
-/**
- * Stable canonical serializer for planner-local deterministic IDs.
- *
- * We intentionally use the engine's canonicalHash instead of random UUIDs.
- * The generated identifier is UUID-shaped and deterministic for the same
- * namespace + input.
- */
-function deterministicId(
-  namespace: string,
-  value: unknown,
-): string {
-  const digest = String(
-    canonicalHash({
-      namespace,
-      value,
-    }),
-  );
+function deterministicId(namespace: string, value: unknown): string {
+  const digest = String(canonicalHash({ namespace, value }));
 
-  /*
-   * UUID v5-like formatting.
-   *
-   * The identifier is not claimed to be an RFC 4122 registered namespace
-   * UUID. It is simply a stable UUID-shaped engine identifier.
-   */
-  const variantByte =
-    (
-      (Number.parseInt(
-        digest.slice(16, 18),
-        16,
-      ) &
-        0x3f) |
-      0x80
-    )
-      .toString(16)
-      .padStart(2, "0");
+  const variantByte = (
+    (Number.parseInt(digest.slice(16, 18), 16) & 0x3f) | 0x80
+  )
+    .toString(16)
+    .padStart(2, "0");
 
   return (
     `${digest.slice(0, 8)}-` +
     `${digest.slice(8, 12)}-` +
     `4${digest.slice(13, 16)}-` +
-    `${variantByte}` +
-    `${digest.slice(18, 20)}-` +
+    `${variantByte}${digest.slice(18, 20)}-` +
     `${digest.slice(20, 32)}`
   );
 }
 
-/**
- * Deterministic planner identifier.
- */
 function planIdFor(
   projectId: string,
   revisionId: string,
   prompt: string,
 ): string {
-  return deterministicId(
-    `${UUID_NAMESPACE}:plan`,
-    {
-      projectId,
-      revisionId,
-      prompt,
-    },
-  );
+  return deterministicId(`${UUID_NAMESPACE}:plan`, {
+    projectId,
+    revisionId,
+    prompt,
+  });
 }
 
-/**
- * Deterministic command identifier.
- *
- * The command index is included so two commands generated from one prompt
- * never collide while preserving deterministic output.
- */
 function commandIdFor(
   projectId: string,
   revisionId: string,
@@ -110,24 +57,18 @@ function commandIdFor(
   targetIds: string[],
   dependencies: string[],
 ): string {
-  return deterministicId(
-    `${UUID_NAMESPACE}:command`,
-    {
-      projectId,
-      revisionId,
-      prompt,
-      commandIndex,
-      commandType,
-      payload,
-      targetIds,
-      dependencies,
-    },
-  );
+  return deterministicId(`${UUID_NAMESPACE}:command`, {
+    projectId,
+    revisionId,
+    prompt,
+    commandIndex,
+    commandType,
+    payload,
+    targetIds,
+    dependencies,
+  });
 }
 
-/**
- * Deterministic intent identifier.
- */
 function intentIdFor(
   projectId: string,
   revisionId: string,
@@ -137,68 +78,42 @@ function intentIdFor(
   targetIds: string[],
   parameters: unknown,
 ): string {
-  return deterministicId(
-    `${UUID_NAMESPACE}:intent`,
-    {
-      projectId,
-      revisionId,
-      prompt,
-      intentIndex,
-      operation,
-      targetIds,
-      parameters,
-    },
-  );
+  return deterministicId(`${UUID_NAMESPACE}:intent`, {
+    projectId,
+    revisionId,
+    prompt,
+    intentIndex,
+    operation,
+    targetIds,
+    parameters,
+  });
 }
 
-/**
- * Deterministic idempotency key.
- *
- * This is intentionally derived from the command identity rather than a
- * random UUID. It therefore remains stable when the same plan is recreated.
- */
 function idempotencyKeyFor(
   projectId: string,
   revisionId: string,
   commandId: string,
 ): string {
   return `plan-${String(
-    canonicalHash({
-      projectId,
-      revisionId,
-      commandId,
-    }),
+    canonicalHash({ projectId, revisionId, commandId }),
   )}`;
 }
 
-/**
- * Deterministic scene identifier used by prompt-created scenes.
- */
 function sceneIdFor(
   projectId: string,
   revisionId: string,
   prompt: string,
   sceneName: string,
 ): string {
-  return deterministicId(
-    `${UUID_NAMESPACE}:scene`,
-    {
-      projectId,
-      revisionId,
-      prompt,
-      sceneName,
-    },
-  );
+  return deterministicId(`${UUID_NAMESPACE}:scene`, {
+    projectId,
+    revisionId,
+    prompt,
+    sceneName,
+  });
 }
 
-/* -------------------------------------------------------------------------- */
-/*                              Entity Resolution                             */
-/* -------------------------------------------------------------------------- */
-
-export const resolveEntity = (
-  entities: any[],
-  reference: string,
-) => {
+export const resolveEntity = (entities: any[], reference: string) => {
   const q = reference.trim().toLowerCase();
 
   const exact = entities.filter(
@@ -211,134 +126,35 @@ export const resolveEntity = (
     (entity) =>
       Array.isArray(entity?.aliases) &&
       entity.aliases.some(
-        (aliasValue: unknown) =>
-          typeof aliasValue === "string" &&
-          aliasValue.toLowerCase() === q,
+        (value: unknown) =>
+          typeof value === "string" &&
+          value.toLowerCase() === q,
       ),
   );
 
-  const matches =
-    exact.length > 0
-      ? exact
-      : alias;
+  const matches = exact.length > 0 ? exact : alias;
 
   if (matches.length === 1) {
     return {
       status: "resolved" as const,
-      entityId: matches[0].id,
+      entityId: matches[0].id as string,
     };
   }
 
   if (matches.length > 1) {
     return {
       status: "ambiguous" as const,
-      candidates: matches.map(
-        (entity) => entity.id,
-      ),
+      candidates: matches.map((entity) => entity.id as string),
     };
   }
 
-  return {
-    status: "missing" as const,
-  };
+  return { status: "missing" as const };
 };
 
-/* -------------------------------------------------------------------------- */
-/*                            Deterministic Command                           */
-/* -------------------------------------------------------------------------- */
+function projectIdentifier(project: any): string {
+  const value = project?.projectId ?? project?.id;
 
-function createCommand(
-  projectId: string,
-  revisionId: string,
-  prompt: string,
-  commandIndex: number,
-  type: string,
-  payload: Record<string, unknown>,
-  targetIds: string[] = [],
-  dependencies: string[] = [],
-) {
-  const commandId = commandIdFor(
-    projectId,
-    revisionId,
-    prompt,
-    commandIndex,
-    type,
-    payload,
-    targetIds,
-    dependencies,
-  );
-
-  return {
-    commandId,
-
-    schemaVersion:
-      "1.0.0",
-
-    commandType:
-      type,
-
-    projectId,
-
-    expectedProjectRevisionId:
-      revisionId,
-
-    idempotencyKey:
-      idempotencyKeyFor(
-        projectId,
-        revisionId,
-        commandId,
-      ),
-
-    targetIds,
-
-    payload,
-
-    dependencies,
-
-    preconditions: {},
-
-    authorization: {
-      scope:
-        `project:${projectId}`,
-    },
-
-    requiredCapabilities: [],
-
-    provenance: {
-      planner:
-        PROMPT_PLANNER_ID,
-
-      version:
-        PROMPT_PLANNER_VERSION,
-    },
-
-    expectedEffects: [],
-
-    undoMetadata: {},
-  };
-}
-
-/* -------------------------------------------------------------------------- */
-/*                              Planner Helpers                               */
-/* -------------------------------------------------------------------------- */
-
-function normalizedPrompt(
-  prompt: string,
-): string {
-  return prompt.trim();
-}
-
-function projectIdentifier(
-  project: any,
-): string {
-  const value =
-    project?.projectId ??
-    project?.id;
-
-  if (
-    typeof value !== "string" ||
-    value.trim().length === 0
-  ) {
+  if (typeof value !== "string" || !value.trim()) {
     throw new CaeError(
       "INVALID_REQUEST",
       "Project must contain a valid projectId.",
@@ -348,624 +164,589 @@ function projectIdentifier(
   return value;
 }
 
-/* -------------------------------------------------------------------------- */
-/*                         Rule-Based Prompt Planner                          */
-/* -------------------------------------------------------------------------- */
+function detectRepresentation(text: string): Representation {
+  const low = text.toLowerCase();
 
-export class RuleBasedPromptPlanner
-  implements Planner
-{
+  if (
+    /\bhybrid\b/.test(low) ||
+    (/\b2d\b/.test(low) && /\b3d\b/.test(low))
+  ) {
+    return "hybrid";
+  }
+
+  if (/\b3d\b|three[- ]dimensional/.test(low)) {
+    return "3d";
+  }
+
+  return "2d";
+}
+
+/**
+ * Extract the actual character name instead of swallowing the rest
+ * of the sentence into the name.
+ */
+function extractCharacter(text: string): {
+  name: string;
+  age?: number;
+  gender?: string;
+} | null {
+  const patterns = [
+    /\b(?:character|cartoon character|boy|girl|man|woman)\s+(?:named|called)\s+["']?([A-Za-z][\w'-]*)/i,
+    /\b(?:named|called)\s+["']?([A-Za-z][\w'-]*)/i,
+  ];
+
+  let name: string | undefined;
+
+  for (const pattern of patterns) {
+    const match = pattern.exec(text);
+    if (match?.[1]) {
+      name = match[1].trim();
+      break;
+    }
+  }
+
+  const hasCharacterIntent =
+    /\b(create|make|build|generate|design)\b/i.test(text) &&
+    /\b(character|cartoon|boy|girl|man|woman)\b/i.test(text);
+
+  if (!name && hasCharacterIntent) {
+    const simple = /\b(?:create|make|build|generate|design)\s+(?:a\s+)?(?:(?:2d|3d|hybrid)\s+)?(?:cartoon\s+)?(?:character|boy|girl|man|woman)\s+([A-Za-z][\w'-]*)/i.exec(
+      text,
+    );
+
+    if (simple?.[1]) {
+      name = simple[1];
+    }
+  }
+
+  if (!name || !hasCharacterIntent) {
+    return null;
+  }
+
+  const ageMatch = /\b(\d{1,3})\s*[- ]?year[- ]old\b/i.exec(text);
+  const genderMatch = /\b(boy|girl|man|woman)\b/i.exec(text);
+
+  return {
+    name,
+    ...(ageMatch ? { age: Number(ageMatch[1]) } : {}),
+    ...(genderMatch ? { gender: genderMatch[1].toLowerCase() } : {}),
+  };
+}
+
+function extractSceneName(text: string): string {
+  const low = text.toLowerCase();
+
+  if (/classroom|school\s*room/.test(low)) return "Classroom";
+  if (/\bbeach\b/.test(low)) return "Beach Scene";
+  if (/\bforest\b/.test(low)) return "Forest Scene";
+  if (/\bcity|street|road\b/.test(low)) return "City Street";
+  if (/\bbedroom\b/.test(low)) return "Bedroom";
+  if (/\bpark\b/.test(low)) return "Park Scene";
+  if (/\bindoor\b/.test(low)) return "Indoor Scene";
+  if (/\boutdoor|landscape|garden|green ground\b/.test(low)) {
+    return "Outdoor Scene";
+  }
+
+  return "Cartoon Scene";
+}
+
+function sceneRequested(text: string): boolean {
+  const low = text.toLowerCase();
+
+  const mentionsScene =
+    /\b(scene|background|environment|landscape|outdoor|indoor|classroom|school\s*room|beach|forest|bedroom|park)\b/.test(
+      low,
+    );
+
+  const mentionsAction =
+    /\b(create|make|build|generate|design|place|put|set|show|render|animate)\b/.test(
+      low,
+    );
+
+  return mentionsScene && mentionsAction;
+}
+
+function extractDimensions(text: string): {
+  width: number;
+  height: number;
+} {
+  const match = /\b(\d{2,5})\s*[x×]\s*(\d{2,5})\b/i.exec(text);
+
+  if (match) {
+    const width = Number(match[1]);
+    const height = Number(match[2]);
+
+    if (
+      Number.isInteger(width) &&
+      Number.isInteger(height) &&
+      width >= 64 &&
+      height >= 64 &&
+      width <= 16384 &&
+      height <= 16384
+    ) {
+      return { width, height };
+    }
+  }
+
+  return { width: 1280, height: 720 };
+}
+
+function extractBackground(text: string): string {
+  const low = text.toLowerCase();
+
+  if (/\bnight|nighttime|night-time\b/.test(low)) return "#17213D";
+  if (/\bsunset|sunset sky\b/.test(low)) return "#F4A261";
+  if (/\bindoor|classroom|bedroom\b/.test(low)) return "#F2E8CF";
+  if (/\bblue sky|outdoor|landscape|garden|green ground\b/.test(low)) {
+    return "#87CEEB";
+  }
+
+  return "#FFFFFF";
+}
+
+export class RuleBasedPromptPlanner implements Planner {
   plan(
     prompt: string,
     project: any,
     revisionId: string,
   ): CommandPlanT {
-    const text =
-      normalizedPrompt(prompt);
+    const text = prompt.trim();
 
     if (!text) {
-      throw new CaeError(
-        "PROMPT_UNCLEAR",
-        "Prompt is empty",
-      );
+      throw new CaeError("PROMPT_UNCLEAR", "Prompt is empty");
     }
 
-    if (
-      typeof revisionId !== "string" ||
-      revisionId.trim().length === 0
-    ) {
+    if (typeof revisionId !== "string" || !revisionId.trim()) {
       throw new CaeError(
         "INVALID_REQUEST",
         "revisionId must be a non-empty string.",
       );
     }
 
-    const projectId =
-      projectIdentifier(project);
-
-    const low =
-      text.toLowerCase();
+    const projectId = projectIdentifier(project);
+    const low = text.toLowerCase();
+    const representation = detectRepresentation(text);
 
     const intents: any[] = [];
     const commands: any[] = [];
-
     const assumptions: string[] = [];
     const warnings: string[] = [];
     const clarifications: string[] = [];
 
-    /* ---------------------------------------------------------------------- */
-    /*                           Deterministic add                            */
-    /* ---------------------------------------------------------------------- */
+    const plannedEntities = new Map<string, string>();
 
     const add = (
       type: string,
       payload: Record<string, unknown> = {},
       targets: string[] = [],
       dependencies: string[] = [],
-    ) => {
-      const commandIndex =
-        commands.length;
+    ): string => {
+      const commandIndex = commands.length;
 
-      const command =
-        createCommand(
+      const commandId = commandIdFor(
+        projectId,
+        revisionId,
+        text,
+        commandIndex,
+        type,
+        payload,
+        targets,
+        dependencies,
+      );
+
+      const command = {
+        commandId,
+        schemaVersion: "1.0.0",
+        commandType: type,
+        projectId,
+        expectedProjectRevisionId: revisionId,
+        idempotencyKey: idempotencyKeyFor(
           projectId,
           revisionId,
-          text,
-          commandIndex,
-          type,
-          payload,
-          targets,
-          dependencies,
-        );
+          commandId,
+        ),
+        targetIds: targets,
+        payload,
+        dependencies,
+        preconditions: {},
+        authorization: { scope: `project:${projectId}` },
+        requiredCapabilities: [],
+        provenance: {
+          planner: PROMPT_PLANNER_ID,
+          version: PROMPT_PLANNER_VERSION,
+        },
+        expectedEffects: [],
+        undoMetadata: {},
+      };
 
       commands.push(command);
 
-      const intentIndex =
-        intents.length;
+      const intentIndex = intents.length;
 
       intents.push({
-        intentId:
-          intentIdFor(
-            projectId,
-            revisionId,
-            text,
-            intentIndex,
-            type,
-            targets,
-            payload,
-          ),
-
-        schemaVersion:
-          "1.0.0",
-
-        operation:
+        intentId: intentIdFor(
+          projectId,
+          revisionId,
+          text,
+          intentIndex,
           type,
-
-        ...(targets[0]
-          ? {
-              targetEntityId:
-                targets[0],
-            }
-          : {}),
-
-        parameters:
+          targets,
           payload,
-
+        ),
+        schemaVersion: "1.0.0",
+        operation: type,
+        ...(targets[0] ? { targetEntityId: targets[0] } : {}),
+        parameters: payload,
         constraints: [],
-
         references: [],
-
         requestedCapabilities: [],
-
-        confidence:
-          0.98,
-
-        explanation:
-          `Mapped from: ${text}`,
-
+        confidence: 0.98,
+        explanation: `Mapped from: ${text}`,
         defaults: [],
-
         assumptions: [],
-
         warnings: [],
-
         clarificationRequests: [],
       });
 
-      return command.commandId;
+      return commandId;
+    };
+
+    const resolveReference = (reference: string) => {
+      const plannedId = plannedEntities.get(reference.toLowerCase());
+
+      if (plannedId) {
+        return {
+          status: "resolved" as const,
+          entityId: plannedId,
+        };
+      }
+
+      return resolveEntity(
+        Array.isArray(project?.entities) ? project.entities : [],
+        reference,
+      );
     };
 
     /* ---------------------------------------------------------------------- */
     /*                           CREATE CHARACTER                             */
     /* ---------------------------------------------------------------------- */
 
-    let match =
-      /create\s+(?:a\s+)?(?:(\d+)[-\s]?year[-\s]?old\s+)?(boy|girl|man|woman|character)?\s*(?:named|name[d]?)?\s*([A-Za-z][\w -]*)/i.exec(
-        text,
+    const character = extractCharacter(text);
+    let characterCommandId: string | undefined;
+    let characterEntityId: string | undefined;
+
+    if (character) {
+      const existing = resolveEntity(
+        Array.isArray(project?.entities) ? project.entities : [],
+        character.name,
       );
 
-    if (
-      match &&
-      /character|boy|girl|man|woman|named/i.test(
-        text,
-      )
-    ) {
-      const age =
-        match[1]
-          ? Number(match[1])
-          : undefined;
-
-      const name =
-        (
-          match[3] ??
-          match[2] ??
-          "Character"
-        ).trim();
-
-      const resolved =
-        resolveEntity(
-          Array.isArray(project?.entities)
-            ? project.entities
-            : [],
-          name,
-        );
-
-      if (
-        resolved.status ===
-        "resolved"
-      ) {
+      if (existing.status === "resolved") {
         throw new CaeError(
           "ENTITY_DUPLICATE",
           "Character already exists",
-          [name],
+          [character.name],
         );
       }
 
-      if (
-        resolved.status ===
-        "ambiguous"
-      ) {
+      if (existing.status === "ambiguous") {
         throw new CaeError(
           "ENTITY_AMBIGUOUS",
-          `Multiple entities match "${name}".`,
-          resolved.candidates,
+          `Multiple entities match "${character.name}".`,
+          existing.candidates,
         );
       }
 
-      const representation =
-        /3d|three dimensional/i.test(
-          low,
-        )
-          ? "3d"
-          : "2d";
-
-      add(
-        "CREATE_CHARACTER",
+      characterEntityId = deterministicId(
+        `${UUID_NAMESPACE}:character`,
         {
-          name,
-
-          ...(age !== undefined
-            ? { age }
-            : {}),
-
-          ...(match[2]
-            ? {
-                gender:
-                  match[2].toLowerCase(),
-              }
-            : {}),
-
-          representation,
-        },
-      );
-    }
-
-    /* ---------------------------------------------------------------------- */
-    /*                             CREATE SCENE                               */
-    /* ---------------------------------------------------------------------- */
-
-    if (
-      /classroom|school\s*room/i.test(
-        low,
-      ) &&
-      /create|make|build/i.test(
-        low,
-      )
-    ) {
-      const sceneId =
-        sceneIdFor(
           projectId,
           revisionId,
-          text,
-          "Classroom",
-        );
+          prompt: text,
+          name: character.name.toLowerCase(),
+        },
+      );
+
+      plannedEntities.set(
+        character.name.toLowerCase(),
+        characterEntityId,
+      );
+
+      characterCommandId = add("CREATE_CHARACTER", {
+        entityId: characterEntityId,
+        name: character.name,
+        representation,
+        ...(character.age !== undefined ? { age: character.age } : {}),
+        ...(character.gender ? { gender: character.gender } : {}),
+      });
+    }
+
+    /* ---------------------------------------------------------------------- */
+    /*                               CREATE SCENE                             */
+    /* ---------------------------------------------------------------------- */
+
+    let sceneCommandId: string | undefined;
+    let sceneId: string | undefined;
+
+    if (sceneRequested(text)) {
+      const sceneName = extractSceneName(text);
+      const dimensions = extractDimensions(text);
+
+      sceneId = sceneIdFor(
+        projectId,
+        revisionId,
+        text,
+        sceneName,
+      );
+
+      const isClassroom = /classroom|school\s*room/i.test(low);
+
+      sceneCommandId = add("CREATE_SCENE", {
+        id: sceneId,
+        name: sceneName,
+        template: isClassroom ? "classroom" : "procedural",
+        type: representation,
+        width: dimensions.width,
+        height: dimensions.height,
+        background: extractBackground(text),
+      });
+    }
+
+    /* ---------------------------------------------------------------------- */
+    /*                            PLACE CHARACTER                             */
+    /* ---------------------------------------------------------------------- */
+
+    const asksPlacement =
+      /\b(place|put|position|set|stand|show)\b/i.test(text) &&
+      /\b(scene|background|environment|outdoor|indoor|landscape|classroom|park|beach|forest|garden)\b/i.test(
+        text,
+      );
+
+    if (
+      characterEntityId &&
+      characterCommandId &&
+      sceneCommandId &&
+      sceneId &&
+      asksPlacement
+    ) {
+      const dimensions = extractDimensions(text);
 
       add(
-        "CREATE_SCENE",
+        "PLACE_CHARACTER",
         {
+          x: Math.round(dimensions.width / 2),
+          y: Math.round(dimensions.height * 0.75),
+          z: 0,
           sceneId,
-
-          name:
-            "Classroom",
-
-          template:
-            "classroom",
-
-          type:
-            /3d/i.test(low)
-              ? "3d"
-              : "2d",
-
-          width:
-            1280,
-
-          height:
-            720,
         },
+        [characterEntityId],
+        [characterCommandId, sceneCommandId],
       );
     }
 
     /* ---------------------------------------------------------------------- */
-    /*                           CREATE EXPRESSION                             */
+    /*                            CREATE EXPRESSION                           */
     /* ---------------------------------------------------------------------- */
 
-    match =
-      /make\s+([A-Za-z][\w-]*)\s+(angry|happy|sad|surprised|fearful|neutral)/i.exec(
+    let match =
+      /\bmake\s+([A-Za-z][\w'-]*)\s+(angry|happy|sad|surprised|fearful|neutral)\b/i.exec(
         text,
       );
 
     if (match) {
-      const reference =
-        match[1];
+      const reference = match[1];
+      const result = resolveReference(reference);
 
-      const result =
-        resolveEntity(
-          Array.isArray(project?.entities)
-            ? project.entities
-            : [],
-          reference,
-        );
-
-      if (
-        result.status ===
-        "resolved"
-      ) {
+      if (result.status === "resolved") {
         add(
           "CREATE_EXPRESSION",
-          {
-            expression:
-              match[2],
-          },
-          [
-            result.entityId!,
-          ],
+          { expression: match[2].toLowerCase() },
+          [result.entityId!],
+          characterCommandId ? [characterCommandId] : [],
         );
-      } else if (
-        result.status ===
-        "ambiguous"
-      ) {
+      } else if (result.status === "ambiguous") {
         clarifications.push(
           `Which character is "${reference}"? Candidates: ${result.candidates.join(", ")}.`,
         );
       } else {
-        clarifications.push(
-          `Which character is "${reference}"?`,
-        );
+        clarifications.push(`Which character is "${reference}"?`);
       }
     }
 
     /* ---------------------------------------------------------------------- */
-    /*                           CREATE ANIMATION                              */
+    /*                            CREATE ANIMATION                            */
     /* ---------------------------------------------------------------------- */
 
     match =
-      /(?:make|let)\s+([A-Za-z][\w-]*)\s+(walk|run|jump|dance|wave)/i.exec(
+      /\b(?:make|let|have)\s+([A-Za-z][\w'-]*)\s+(walk|run|jump|dance|wave)\b/i.exec(
         text,
       );
 
     if (match) {
-      const reference =
-        match[1];
+      const reference = match[1];
+      const result = resolveReference(reference);
 
-      const result =
-        resolveEntity(
-          Array.isArray(project?.entities)
-            ? project.entities
-            : [],
-          reference,
-        );
-
-      if (
-        result.status ===
-        "resolved"
-      ) {
+      if (result.status === "resolved") {
         add(
           "CREATE_ANIMATION",
           {
-            motion:
-              match[2],
-
-            durationTicks:
-              48000,
+            motion: match[2].toLowerCase(),
+            durationTicks: 48000,
           },
-          [
-            result.entityId!,
-          ],
+          [result.entityId!],
+          characterCommandId ? [characterCommandId] : [],
         );
-      } else if (
-        result.status ===
-        "ambiguous"
-      ) {
+      } else if (result.status === "ambiguous") {
         clarifications.push(
           `Which character is "${reference}"? Candidates: ${result.candidates.join(", ")}.`,
         );
       } else {
-        clarifications.push(
-          `Which character is "${reference}"?`,
-        );
+        clarifications.push(`Which character is "${reference}"?`);
       }
     }
 
     /* ---------------------------------------------------------------------- */
-    /*                             MODIFY OUTFIT                              */
+    /*                              MODIFY OUTFIT                              */
     /* ---------------------------------------------------------------------- */
 
     match =
-      /change\s+([A-Za-z][\w-]*)['’]s\s+(shirt|top)\s+to\s+([#A-Za-z0-9]+)/i.exec(
+      /\bchange\s+([A-Za-z][\w'-]*)['’]s\s+(shirt|top)\s+to\s+(#[0-9a-f]{3,8}|[A-Za-z]+)\b/i.exec(
         text,
       );
 
     if (match) {
-      const reference =
-        match[1];
+      const result = resolveReference(match[1]);
 
-      const result =
-        resolveEntity(
-          Array.isArray(project?.entities)
-            ? project.entities
-            : [],
-          reference,
-        );
-
-      if (
-        result.status ===
-        "resolved"
-      ) {
+      if (result.status === "resolved") {
         add(
           "MODIFY_OUTFIT",
-          {
-            [match[2]]:
-              match[3],
-          },
-          [
-            result.entityId!,
-          ],
+          { [match[2].toLowerCase()]: match[3] },
+          [result.entityId!],
         );
-      } else if (
-        result.status ===
-        "ambiguous"
-      ) {
+      } else if (result.status === "ambiguous") {
         clarifications.push(
-          `Which character is "${reference}"? Candidates: ${result.candidates.join(", ")}.`,
+          `Which character is "${match[1]}"? Candidates: ${result.candidates.join(", ")}.`,
         );
       } else {
-        clarifications.push(
-          `Which character is "${reference}"?`,
-        );
+        clarifications.push(`Which character is "${match[1]}"?`);
       }
     }
 
     /* ---------------------------------------------------------------------- */
-    /*                              DIALOGUE                                  */
+    /*                                 DIALOGUE                                */
     /* ---------------------------------------------------------------------- */
 
     match =
-      /make\s+([A-Za-z][\w-]*)\s+say\s+["“](.+?)["”]/i.exec(
-        text,
-      );
+      /\bmake\s+([A-Za-z][\w'-]*)\s+say\s+["“](.+?)["”]/i.exec(text);
 
     if (match) {
-      const reference =
-        match[1];
+      const result = resolveReference(match[1]);
 
-      const result =
-        resolveEntity(
-          Array.isArray(project?.entities)
-            ? project.entities
-            : [],
-          reference,
-        );
-
-      if (
-        result.status ===
-        "resolved"
-      ) {
+      if (result.status === "resolved") {
         add(
           "CREATE_DIALOGUE",
           {
-            speakerId:
-              result.entityId,
-
-            text:
-              match[2],
-
-            language:
-              /\b(hindi|हिंदी)\b/i.test(
-                low,
-              )
-                ? "hi-IN"
-                : "en-IN",
+            speakerId: result.entityId,
+            text: match[2],
+            language: /\b(hindi|हिंदी)\b/i.test(low) ? "hi-IN" : "en-IN",
           },
-          [
-            result.entityId!,
-          ],
+          [result.entityId!],
         );
-      } else if (
-        result.status ===
-        "ambiguous"
-      ) {
+      } else if (result.status === "ambiguous") {
         clarifications.push(
-          `Which character is "${reference}"? Candidates: ${result.candidates.join(", ")}.`,
+          `Which character is "${match[1]}"? Candidates: ${result.candidates.join(", ")}.`,
         );
       } else {
-        clarifications.push(
-          `Which character is "${reference}"?`,
-        );
+        clarifications.push(`Which character is "${match[1]}"?`);
       }
     }
 
     /* ---------------------------------------------------------------------- */
-    /*                              CAMERA                                    */
+    /*                                  CAMERA                                 */
     /* ---------------------------------------------------------------------- */
 
-    if (
-      /close[\s-]?up/i.test(low)
-    ) {
-      add(
-        "MODIFY_CAMERA",
-        {
-          shot:
-            "close-up",
-
-          zoom:
-            2.2,
-        },
-      );
+    if (/close[\s-]?up/i.test(low)) {
+      add("MODIFY_CAMERA", { shot: "close-up", zoom: 2.2 });
     }
 
-    if (
-      /wide\s+shot/i.test(low)
-    ) {
-      add(
-        "MODIFY_CAMERA",
-        {
-          shot:
-            "wide",
-
-          zoom:
-            0.8,
-        },
-      );
+    if (/\bwide\s+shot\b/i.test(low)) {
+      add("MODIFY_CAMERA", { shot: "wide", zoom: 0.8 });
     }
 
     /* ---------------------------------------------------------------------- */
-    /*                              LIP-SYNC                                  */
+    /*                                  LIP-SYNC                               */
     /* ---------------------------------------------------------------------- */
 
-    if (
-      /lip[\s-]?sync|lipsync/i.test(
-        low,
-      )
-    ) {
+    if (/lip[\s-]?sync|lipsync/i.test(low)) {
       warnings.push(
         "Lip-sync requires committed audio/phoneme timing; no hidden analysis is performed during render.",
       );
     }
 
     /* ---------------------------------------------------------------------- */
-    /*                         Bounded Grammar Guard                           */
+    /*                              BOUNDED GRAMMAR                            */
     /* ---------------------------------------------------------------------- */
 
-    if (
-      commands.length === 0 &&
-      clarifications.length === 0
-    ) {
+    if (commands.length === 0 && clarifications.length === 0) {
       throw new CaeError(
         "PROMPT_UNCLEAR",
         "Prompt is outside the bounded deterministic grammar; use canonical commands or an enabled LLM planner.",
       );
     }
 
-    /* ---------------------------------------------------------------------- */
-    /*                              Plan Object                                */
-    /* ---------------------------------------------------------------------- */
+    if (representation === "hybrid") {
+      assumptions.push(
+        "Hybrid representation requested. Actual hybrid rendering depends on the renderer and execution adapters supporting both 2D and 3D content.",
+      );
+    }
+
+    if (
+      character &&
+      sceneRequested(text) &&
+      !asksPlacement
+    ) {
+      assumptions.push(
+        "A character and scene were planned, but explicit placement was not requested.",
+      );
+    }
 
     const plan: any = {
-      planId:
-        planIdFor(
-          projectId,
-          revisionId,
-          text,
-        ),
-
-      schemaVersion:
-        "1.0.0",
-
-      sourceProjectRevisionId:
-        revisionId,
-
+      planId: planIdFor(projectId, revisionId, text),
+      schemaVersion: "1.0.0",
+      sourceProjectRevisionId: revisionId,
       planner: {
-        id:
-          PROMPT_PLANNER_ID,
-
-        version:
-          PROMPT_PLANNER_VERSION,
+        id: PROMPT_PLANNER_ID,
+        version: PROMPT_PLANNER_VERSION,
       },
-
       intents,
-
       commands,
-
-      dependencies:
-        Object.fromEntries(
-          commands.map(
-            (currentCommand) => [
-              currentCommand.commandId,
-              currentCommand.dependencies,
-            ],
-          ),
+      dependencies: Object.fromEntries(
+        commands.map((command) => [
+          command.commandId,
+          command.dependencies,
+        ]),
+      ),
+      affectedEntityIds: [
+        ...new Set(
+          commands.flatMap((command) => command.targetIds),
         ),
-
-      affectedEntityIds:
-        [
-          ...new Set(
-            commands.flatMap(
-              (currentCommand) =>
-                currentCommand.targetIds,
-            ),
-          ),
-        ],
-
+      ],
       requiredCapabilities: [],
-
       assumptions,
-
       warnings,
-
-      clarificationRequests:
-        clarifications,
-
-      previewable:
-        true,
-
-      estimates: {
-        commandCount:
-          commands.length,
-      },
-
-      /*
-       * Hash is calculated over the complete canonical plan except for
-       * planHash itself.
-       *
-       * `undefined` is deliberately not used because JSON.stringify omits
-       * undefined object properties. `null` makes the hashed representation
-       * explicit and stable.
-       */
+      clarificationRequests: clarifications,
+      previewable: true,
+      estimates: { commandCount: commands.length },
       planHash: "",
     };
 
-    plan.planHash =
-      canonicalHash({
-        ...plan,
-        planHash: null,
-      }) as string;
+    plan.planHash = canonicalHash({
+      ...plan,
+      planHash: null,
+    }) as string;
 
     return plan as CommandPlanT;
   }
 }
-
-/* -------------------------------------------------------------------------- */
-/*                               Default Export                               */
-/* -------------------------------------------------------------------------- */
 
 export default RuleBasedPromptPlanner;
